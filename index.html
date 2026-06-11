@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#070b10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>أسهَر — رفيقك ضد ساهر</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- HUD (decorative layers ignore the pointer; buttons re-enable it) -->
+<div class="hud" id="hud">
+
+  <div class="topbar">
+    <div class="brand">أسهَر<span class="brand-dot"></span></div>
+    <div class="gps-dot" id="gpsDot"></div>
+  </div>
+
+  <!-- active alert -->
+  <div class="alert-card" id="alertCard">
+    <div class="sign"><span id="alertSp">؟</span></div>
+    <div class="alert-mid">
+      <div class="alert-title">ساهر قدامك</div>
+      <div class="alert-dist" id="alertDist">—</div>
+      <div class="alert-track"><div class="alert-bar" id="alertBar"></div></div>
+    </div>
+  </div>
+
+  <!-- speed cluster -->
+  <div class="cluster">
+    <div class="speed-ring">
+      <div class="speed-num" id="speedVal">0</div>
+      <div class="speed-unit">كم/س</div>
+    </div>
+    <div class="next-mini" id="nextMini">بانتظار إشارة GPS…</div>
+  </div>
+
+  <button class="recenter" id="recenter">إعادة تمركز</button>
+  <div class="demo-badge" id="demoBadge">وضع التجربة — اضغط للإيقاف</div>
+
+  <button class="fab" id="fabCam">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>
+    <span>كاميرا هنا</span>
+  </button>
+
+  <!-- one-tap save toast with quick limit chips -->
+  <div class="toast-cam" id="toastCam">
+    <div class="tc-line">انحفظت الكاميرا ✓ <button id="undoCam">تراجع</button></div>
+    <div class="tc-chips">
+      <span class="tc-q">حدّها؟</span>
+      <button class="chip" data-sp="80">80</button>
+      <button class="chip" data-sp="100">100</button>
+      <button class="chip" data-sp="120">120</button>
+      <button class="chip" data-sp="140">140</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<!-- bottom sheet -->
+<div class="sheet" id="sheet">
+  <button class="sheet-grab" id="sheetGrab"><span></span></button>
+  <div class="tabs">
+    <button class="tab on" data-pane="paneNear">القريبة</button>
+    <button class="tab" data-pane="paneRoute">خط جدة–ينبع</button>
+    <button class="tab" data-pane="paneSet">الإعدادات</button>
+  </div>
+  <div class="pane on" id="paneNear"><div class="list" id="listNear"></div></div>
+  <div class="pane" id="paneRoute"><div class="list" id="listRoute"></div></div>
+  <div class="pane" id="paneSet">
+    <label class="set-row"><span>تنبيه صوتي (بيب)</span><input type="checkbox" id="setSound"><i></i></label>
+    <label class="set-row"><span>تنبيه كلامي</span><input type="checkbox" id="setVoice"><i></i></label>
+    <label class="set-row"><span>وضع الاتجاه الصارم<small>تجاهل كاميرات الاتجاه المعاكس — قد يفوّت تنبيهات</small></span><input type="checkbox" id="setStrict"><i></i></label>
+    <div class="set-actions">
+      <button class="btn" id="btnExport">تصدير كاميراتي</button>
+      <label class="btn" for="fileImport">استيراد ملف (JSON/GPX/CSV)<input type="file" id="fileImport" accept=".json,.gpx,.csv" hidden></label>
+    </div>
+    <p class="fine">قاعدة البيانات: © مساهمو OpenStreetMap (ODbL) + إضافاتك المحلية. القاعدة غير كاملة —
+      خصوصاً الطرق السريعة — والكاميرات المتنقلة ما تنرصد. التزامك بالسرعة هو الحماية الحقيقية.</p>
+  </div>
+</div>
+
+<!-- start overlay -->
+<div class="start" id="startOverlay">
+  <div class="start-inner">
+    <div class="logo">
+      <svg viewBox="0 0 96 96" width="92" height="92">
+        <defs><linearGradient id="amb" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#ffd47e"/><stop offset="1" stop-color="#ff9f1c"/>
+        </linearGradient></defs>
+        <circle cx="48" cy="48" r="44" fill="none" stroke="url(#amb)" stroke-width="3" opacity=".35"/>
+        <circle cx="48" cy="48" r="32" fill="none" stroke="url(#amb)" stroke-width="2.5" opacity=".55"/>
+        <path d="M14 48 Q48 18 82 48 Q48 78 14 48 Z" fill="none" stroke="url(#amb)" stroke-width="4"/>
+        <circle cx="48" cy="48" r="11" fill="url(#amb)"/>
+        <circle cx="48" cy="48" r="4.5" fill="#070b10"/>
+        <line x1="48" y1="48" x2="86" y2="12" stroke="url(#amb)" stroke-width="3" stroke-linecap="round" class="sweep"/>
+      </svg>
+    </div>
+    <h1>أسهَر</h1>
+    <p class="tag">عينك اللي ما تنام… تصيد ساهر قبل لا يصيدك</p>
+    <button class="go" id="startBtn">ابدأ الرحلة</button>
+    <button class="ghost" id="demoBtn">وضع التجربة (جدة)</button>
+    <p class="start-fine"><span id="camCount">…</span> كاميرا محمّلة · يفضّل تثبيت الجوال وشبكه بالشاحن</p>
+  </div>
+</div>
+
+<script src="vendor/leaflet/leaflet.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

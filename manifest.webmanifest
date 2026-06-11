@@ -1,0 +1,18 @@
+{
+  "name": "أسهَر — رفيقك ضد ساهر",
+  "short_name": "أسهَر",
+  "description": "ينبهك على كاميرات ساهر قبل لا توصلها — خصوصاً خط جدة–ينبع",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#070b10",
+  "theme_color": "#070b10",
+  "icons": [
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
