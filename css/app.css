@@ -382,6 +382,69 @@ body.over::after {
 }
 .start-fine { color: #67737e; font-size: 11.5px; margin-top: 26px; line-height: 1.8; }
 
+/* ============ family additions ============ */
+.name-inp {
+  width: 140px; flex: 0 0 auto;
+  background: rgba(255, 255, 255, 0.06); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 10px;
+  padding: 9px 12px; font: 700 14px "Plex Arabic", sans-serif;
+  text-align: center;
+}
+.name-inp::placeholder { color: #5c6770; font-weight: 400; }
+.name-inp:focus { outline: none; border-color: var(--amber); }
+
+.btn-share {
+  background: linear-gradient(160deg, rgba(255, 195, 94, 0.22), rgba(255, 159, 28, 0.16));
+  border-color: rgba(255, 179, 71, 0.4);
+}
+
+.import-note { color: var(--good) !important; font-weight: 700; min-height: 0; }
+.import-note:empty { display: none; }
+
+.ios-hint {
+  display: none;
+  margin-top: 18px; padding: 12px 14px;
+  background: rgba(255, 179, 71, 0.08);
+  border: 1px solid var(--line); border-radius: 14px;
+  font-size: 12.5px; line-height: 2; color: var(--ink);
+  text-align: right;
+}
+.ios-hint.show { display: block; }
+.ios-hint svg { vertical-align: -2px; margin: 0 2px; color: var(--amber-hi); }
+.ios-hint b { color: var(--amber-hi); }
+.ios-hint button {
+  display: block; margin: 8px auto 0;
+  background: none; border: 1px solid var(--line); color: var(--amber-hi);
+  border-radius: 999px; padding: 5px 22px; font: 700 12px "Plex Arabic", sans-serif;
+}
+
+.dlg {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(4, 6, 9, 0.75);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  display: none; place-items: center;
+}
+.dlg.show { display: grid; }
+.dlg-box {
+  width: min(320px, 86vw);
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 20px; padding: 22px;
+  text-align: center;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+.dlg-box h3 { font-size: 20px; color: var(--amber-hi); }
+.dlg-box p { font-size: 12.5px; color: var(--dim); margin: 6px 0 14px; }
+.dlg-box input {
+  width: 100%; box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.06); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 12px;
+  padding: 12px; font: 700 16px "Plex Arabic", sans-serif; text-align: center;
+}
+.dlg-box input:focus { outline: none; border-color: var(--amber); }
+.dlg-row { display: flex; gap: 8px; margin-top: 14px; }
+.go.small { flex: 2; padding: 11px; font-size: 15px; border-radius: 12px; box-shadow: none; }
+.ghost.small { flex: 1; margin: 0; padding: 11px; font-size: 13px; border-radius: 12px; }
+
 @media (max-height: 620px) {
   .speed-num { font-size: 60px; min-width: 96px; }
   .cluster { bottom: calc(var(--sab) + 74px); }

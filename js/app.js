@@ -87,7 +87,8 @@ function addCamMarker(c) {
     keyboard: false,
   });
   if (c.src !== "osm") {
-    m.bindPopup(`<div class="pop"><b>كاميرا (أنت أضفتها)</b><br>الحد: ${c.sp || "غير محدد"}<br><button class="pop-del" data-id="${c.id}">حذف</button></div>`);
+    const who = c.src === "family" ? `كاميرا العائلة${c.by ? " — " + c.by : ""}` : "كاميرا (أنت أضفتها)";
+    m.bindPopup(`<div class="pop"><b>${who}</b><br>الحد: ${c.sp || "غير محدد"}<br><button class="pop-del" data-id="${c.id}">حذف</button></div>`);
   } else {
     m.bindPopup(`<div class="pop"><b>ساهر</b><br>الحد: ${c.sp || "غير معروف"}${c.dir >= 0 ? "<br>اتجاهية" : ""}<br><span class="pop-src">المصدر: OSM</span></div>`);
   }
@@ -273,18 +274,48 @@ function clearAlertUI(passed = false) {
   S.activeId = null;
 }
 
+// ---------- family identity ----------
+const familyName = () => localStorage.getItem("ashar.name") || "";
+function askName(then) {
+  const dlg = $("nameDlg");
+  dlg._then = then || null;
+  $("nameInput").value = familyName();
+  dlg.classList.add("show");
+  setTimeout(() => $("nameInput").focus(), 60);
+}
+function closeNameDlg(save) {
+  const dlg = $("nameDlg");
+  if (save) {
+    const v = $("nameInput").value.trim().slice(0, 20);
+    if (v) { localStorage.setItem("ashar.name", v); $("setName").value = v; }
+  }
+  localStorage.setItem("ashar.nameAsked", "1");
+  dlg.classList.remove("show");
+  const f = dlg._then;
+  dlg._then = null;
+  if (f) f();
+}
+$("nameSave").addEventListener("click", () => closeNameDlg(true));
+$("nameSkip").addEventListener("click", () => closeNameDlg(false));
+$("nameInput").addEventListener("keydown", (e) => { if (e.key === "Enter") closeNameDlg(true); });
+
 // ---------- add camera (one tap) ----------
 let lastAdded = null;
-$("fabCam").addEventListener("click", () => {
-  if (!S.fix) { toast("بانتظار إشارة GPS…"); return; }
+function addCamHere() {
   const c = {
     id: "u" + Date.now(), lat: S.fix.lat, lon: S.fix.lon,
-    sp: 0, dir: -1, src: "user", heading: S.fix.heading ?? -1, at: new Date().toISOString(),
+    sp: 0, dir: -1, src: "user", by: familyName(),
+    heading: S.fix.heading ?? -1, at: new Date().toISOString(),
   };
   S.cams.push(c); addCamMarker(c); saveUserCams();
   lastAdded = c.id;
   toastCam();
   snd.ok();
+}
+$("fabCam").addEventListener("click", () => {
+  if (!S.fix) { toast("بانتظار إشارة GPS…"); return; }
+  if (!familyName() && !localStorage.getItem("ashar.nameAsked")) askName(addCamHere);
+  else addCamHere();
 });
 
 function toastCam() {
@@ -356,7 +387,7 @@ function renderList(which) {
     ? arr.slice(0, 80).map(({ c, d }) => `
       <div class="row" data-id="${c.id}">
         <div class="row-sign ${c.src !== "osm" ? "mine" : ""}">${c.sp || "•"}</div>
-        <div class="row-txt"><b>${c.src !== "osm" ? "كاميرتك" : "ساهر"}</b><span>${fmtDist(d)}</span></div>
+        <div class="row-txt"><b>${c.src === "family" ? (c.by || "العائلة") : c.src !== "osm" ? "كاميرتك" : "ساهر"}</b><span>${fmtDist(d)}</span></div>
         ${c.src !== "osm" ? `<button class="row-del" data-id="${c.id}">حذف</button>` : ""}
       </div>`).join("")
     : `<div class="empty">${which === "paneRoute" ? "ما فيه كاميرات موثّقة على الخط — استخدم زر «كاميرا هنا» وقت تشوف وحدة" : "ما فيه كاميرات قريبة بنطاق 30 كم"}</div>`;
@@ -441,6 +472,81 @@ $("fileImport").addEventListener("change", async (e) => {
   e.target.value = "";
 });
 
+// ---------- family share-link (WhatsApp-friendly, zero backend) ----------
+const b64enc = (s) => btoa(unescape(encodeURIComponent(s)));
+const b64dec = (s) => decodeURIComponent(escape(atob(s)));
+
+function buildShareUrl() {
+  const mine = S.cams.filter((c) => c.src !== "osm");
+  const payload = {
+    v: 1,
+    by: familyName() || "العائلة",
+    cams: mine.map((c) => [+c.lat.toFixed(5), +c.lon.toFixed(5), c.sp | 0, c.dir ?? -1, (c.by || familyName() || "").slice(0, 20)]),
+  };
+  return location.origin + location.pathname + "#add=" + b64enc(JSON.stringify(payload));
+}
+window.__ASHAR.buildShareUrl = buildShareUrl;
+
+$("btnShare").addEventListener("click", async () => {
+  const mine = S.cams.filter((c) => c.src !== "osm");
+  if (!mine.length) { toast("علّم كاميرات أول بزر «كاميرا هنا»"); return; }
+  if (!familyName() && !localStorage.getItem("ashar.nameAsked")) { askName(() => $("btnShare").click()); return; }
+  const url = buildShareUrl();
+  const text = `🦅 أسهَر — ${mine.length} كاميرا ساهر من ${familyName() || "العائلة"}\nافتح الرابط على جوالك وبتنضاف تلقائياً:`;
+  if (navigator.share) {
+    try { await navigator.share({ title: "أسهَر", text, url }); return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  try { await navigator.clipboard.writeText(text + "\n" + url); toast("انتسخ الرابط ✓ — أرسله بقروب العائلة"); }
+  catch { prompt("انسخ الرابط وأرسله للعائلة:", url); }
+});
+
+function importFromHash() {
+  const m = location.hash.match(/^#add=(.+)$/);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  try {
+    const j = JSON.parse(b64dec(m[1]));
+    if (j.v !== 1 || !Array.isArray(j.cams)) throw new Error("bad payload");
+    let added = 0;
+    for (const r of j.cams) {
+      const [lat, lon, sp, dir, by] = r;
+      if (typeof lat !== "number" || typeof lon !== "number") continue;
+      if (!(lat >= 15 && lat <= 34 && lon >= 33 && lon <= 57)) continue;
+      if (S.cams.some((c) => haversine(c.lat, c.lon, lat, lon) < 40)) continue;
+      const c = {
+        id: "f" + Date.now() + "_" + added, lat, lon, sp: sp | 0,
+        dir: typeof dir === "number" ? dir : -1, src: "family",
+        by: String(by || j.by || "").slice(0, 20),
+      };
+      S.cams.push(c); addCamMarker(c); added++;
+    }
+    if (added) saveUserCams();
+    const msg = added
+      ? `وصلتك ${added} كاميرا من ${j.by || "العائلة"} ✓`
+      : "كاميرات الرابط عندك من قبل ✓";
+    $("importNote").textContent = msg;
+    toast(msg);
+    $("camCount").textContent = S.cams.length;
+  } catch {
+    $("importNote").textContent = "الرابط غير صالح — اطلب رابط جديد";
+    toast("رابط غير صالح");
+  }
+}
+
+// ---------- iOS install hint ----------
+function iosInstallHint() {
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  if (isIOS && !standalone && !localStorage.getItem("ashar.iosHintDone")) {
+    $("iosHint").classList.add("show");
+  }
+}
+$("iosHintClose").addEventListener("click", () => {
+  localStorage.setItem("ashar.iosHintDone", "1");
+  $("iosHint").classList.remove("show");
+});
+
 // ---------- wake lock ----------
 let wakeLock = null;
 async function keepAwake() {
@@ -503,6 +609,14 @@ async function boot() {
   bindToggle("setVoice", "voice");
   bindToggle("setStrict", "strictDir");
   renderList("paneNear");
+
+  $("setName").value = familyName();
+  $("setName").addEventListener("change", () => {
+    localStorage.setItem("ashar.name", $("setName").value.trim().slice(0, 20));
+    localStorage.setItem("ashar.nameAsked", "1");
+  });
+  importFromHash();
+  iosInstallHint();
 
   const params = new URLSearchParams(location.search);
   const begin = (demo) => {

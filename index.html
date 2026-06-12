@@ -78,6 +78,10 @@
   <div class="pane on" id="paneNear"><div class="list" id="listNear"></div></div>
   <div class="pane" id="paneRoute"><div class="list" id="listRoute"></div></div>
   <div class="pane" id="paneSet">
+    <label class="set-row"><span>اسمك للعائلة<small>يظهر مع الكاميرات اللي تعلّمها</small></span><input type="text" id="setName" class="name-inp" maxlength="20" placeholder="أبو فارس"></label>
+    <div class="set-actions">
+      <button class="btn btn-share" id="btnShare">📤 شارك كاميراتك مع العائلة (رابط)</button>
+    </div>
     <label class="set-row"><span>تنبيه صوتي (بيب)</span><input type="checkbox" id="setSound"><i></i></label>
     <label class="set-row"><span>تنبيه كلامي</span><input type="checkbox" id="setVoice"><i></i></label>
     <label class="set-row"><span>وضع الاتجاه الصارم<small>تجاهل كاميرات الاتجاه المعاكس — قد يفوّت تنبيهات</small></span><input type="checkbox" id="setStrict"><i></i></label>
@@ -110,7 +114,25 @@
     <p class="tag">عينك اللي ما تنام… تصيد ساهر قبل لا يصيدك</p>
     <button class="go" id="startBtn">ابدأ الرحلة</button>
     <button class="ghost" id="demoBtn">وضع التجربة (جدة)</button>
-    <p class="start-fine"><span id="camCount">…</span> كاميرا محمّلة · يفضّل تثبيت الجوال وشبكه بالشاحن</p>
+    <p class="start-fine"><span id="camCount">…</span> كاميرا محمّلة · ثبّت الجوال وشبكه بالشاحن<br>🔊 ارفع كتم الصوت — التنبيه الكلامي ما يُسمع والجوال مكتوم</p>
+    <p class="start-fine import-note" id="importNote"></p>
+    <div class="ios-hint" id="iosHint">
+      <span>📲 خله تطبيق على جوالك: افتح بـ Safari ثم <b>مشاركة <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13M8 7l4-4 4 4M5 11v9h14v-9"/></svg> ← إضافة إلى الصفحة الرئيسية</b></span>
+      <button id="iosHintClose">فهمت</button>
+    </div>
+  </div>
+</div>
+
+<!-- family name dialog -->
+<div class="dlg" id="nameDlg">
+  <div class="dlg-box">
+    <h3>وش اسمك؟</h3>
+    <p>يظهر للعائلة مع كل كاميرا تعلّمها</p>
+    <input id="nameInput" maxlength="20" placeholder="مثال: أبو فارس" autocomplete="off">
+    <div class="dlg-row">
+      <button class="go small" id="nameSave">حفظ</button>
+      <button class="ghost small" id="nameSkip">تخطّي</button>
+    </div>
   </div>
 </div>
 
