@@ -302,6 +302,42 @@ function trackTrip(fix) {
   }
   if (!t.start) t.start = fix.ts;
   t.end = fix.ts;
+  detectSlowdown(fix);
+}
+
+// Is there already a known camera within `m` meters of this point?
+function nearKnownCam(lat, lon, m = 250) {
+  for (const c of S.cams) if (haversine(lat, lon, c.lat, c.lon) < m) return true;
+  return false;
+}
+
+// Passive Saher detection: a sharp slow-down THEN speed-up on a fast road,
+// away from any known camera, is the classic "braked for a Saher" signature.
+// We never interrupt the drive — candidates are reviewed in the trip report.
+function detectSlowdown(fix) {
+  const t = S.trip;
+  const kmh = fix.kmh;
+  if (!t.inDip) {
+    // climbing / cruising — remember the recent peak
+    t.peak = Math.max(t.peak || 0, kmh);
+    // a real braking event only matters at highway-ish speed
+    if (t.peak >= 90 && kmh < t.peak - 30) {
+      t.inDip = true;
+      t.dipMin = kmh;
+      t.dipLoc = { lat: fix.lat, lon: fix.lon };
+    }
+  } else {
+    if (kmh < t.dipMin) { t.dipMin = kmh; t.dipLoc = { lat: fix.lat, lon: fix.lon }; }
+    // recovered → close the dip and log a candidate at the slowest point
+    if (kmh > t.dipMin + 15) {
+      const { lat, lon } = t.dipLoc;
+      const known = nearKnownCam(lat, lon, 250);
+      const dup = t.slow.some((s) => haversine(s.lat, s.lon, lat, lon) < 300);
+      if (!known && !dup) t.slow.push({ lat, lon, from: Math.round(t.peak), to: Math.round(t.dipMin) });
+      t.inDip = false;
+      t.peak = kmh;
+    }
+  }
 }
 
 function fireAlert(cam, dist, stage) {
@@ -357,7 +393,8 @@ function setLimit(v) {
 
 // ---------- trip safety report (reinforces the behaviour that actually matters) ----------
 function startTrip() {
-  S.trip = { movingFixes: 0, overFixes: 0, maxKmh: 0, maxOvershoot: 0, distM: 0, start: 0, end: 0, lastPt: null };
+  S.trip = { movingFixes: 0, overFixes: 0, maxKmh: 0, maxOvershoot: 0, distM: 0, start: 0, end: 0, lastPt: null,
+             slow: [], peak: 0, inDip: false, dipMin: 0, dipLoc: null };
 }
 function endTripAndReport() {
   const t = S.trip;
@@ -373,8 +410,9 @@ function endTripAndReport() {
     maxKmh: Math.round(t.maxKmh),
     pctOver: Math.round(pctOver),
     alerts: window.__ASHAR.alerts.length,
+    candidates: t.slow.slice(0, 6),
   });
-  console.log("ASHAR_TRIP", JSON.stringify({ score, km: +(t.distM / 1000).toFixed(1), mins, maxKmh: Math.round(t.maxKmh), pctOver: Math.round(pctOver) }));
+  console.log("ASHAR_TRIP", JSON.stringify({ score, km: +(t.distM / 1000).toFixed(1), mins, maxKmh: Math.round(t.maxKmh), pctOver: Math.round(pctOver), candidates: t.slow.length }));
 }
 function showTripReport(r) {
   const grade = r.score >= 85 ? "good" : r.score >= 60 ? "mid" : "bad";
@@ -389,8 +427,46 @@ function showTripReport(r) {
   $("tripMax").textContent = r.maxKmh;
   $("tripOver").textContent = r.pctOver + "٪";
   $("tripAlerts").textContent = r.alerts;
+  renderCandidates(r.candidates || []);
   $("tripReport").classList.add("show");
 }
+
+// "You slowed sharply here — was it a Saher?" — safe post-trip confirmation
+function renderCandidates(list) {
+  const box = $("tripCands");
+  if (!box) return;
+  if (!list.length) { box.innerHTML = ""; box.classList.remove("show"); return; }
+  box.classList.add("show");
+  box.innerHTML =
+    `<div class="cand-title">خفّفت فجأة بـ ${list.length} ${list.length === 1 ? "موقع" : "مواقع"} مجهولة — كان فيه ساهر؟</div>` +
+    list.map((c, i) => `
+      <div class="cand-row" data-i="${i}">
+        <span class="cand-info">من ${c.from} لـ ${c.to} كم/س</span>
+        <span class="cand-acts">
+          <button class="cand-yes" data-i="${i}">نعم، ساهر</button>
+          <button class="cand-no" data-i="${i}">لا</button>
+        </span>
+      </div>`).join("");
+  box._list = list;
+}
+document.addEventListener("click", (e) => {
+  const yes = e.target.closest(".cand-yes");
+  const no = e.target.closest(".cand-no");
+  if (!yes && !no) return;
+  const box = $("tripCands");
+  const i = +(yes || no).dataset.i;
+  const c = box._list?.[i];
+  const row = (yes || no).closest(".cand-row");
+  if (yes && c) {
+    ensureRoom();
+    const cam = { id: "u" + Date.now() + "_" + i, lat: c.lat, lon: c.lon, sp: 0, dir: -1,
+                  src: S.room ? "family" : "user", by: familyName(), at: new Date().toISOString() };
+    S.cams.push(cam); saveUserCams(); refreshMarkers(); syncPush(cam);
+    row.innerHTML = '<span class="cand-done">انضافت ✓</span>';
+  } else if (row) {
+    row.remove();
+  }
+});
 
 // ---------- family identity ----------
 const familyName = () => localStorage.getItem("ashar.name") || "";
@@ -789,7 +865,7 @@ function updateSyncUI() {
 
 // minimal support/debug handle (also used to verify sync without the UI)
 window.__ASHAR.sync = { join: joinRoom, reconcile: pullAndReconcile, room: () => S.room, count: () => S.cams.length };
-window.__ASHAR.dbg = { map: () => map, refresh: refreshMarkers, rendered: () => Object.keys(camMarkers).length };
+window.__ASHAR.dbg = { map: () => map, rendered: () => Object.keys(camMarkers).length };
 
 // ---------- iOS install hint ----------
 function iosInstallHint() {

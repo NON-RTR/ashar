@@ -427,6 +427,7 @@ body.over::after {
 .dlg.show { display: grid; }
 .dlg-box {
   width: min(320px, 86vw);
+  max-height: 88vh; overflow-y: auto;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 20px; padding: 22px;
   text-align: center;
@@ -511,6 +512,23 @@ body.over::after {
 }
 .trip-stats b { font: 700 17px var(--digits); color: var(--ink); }
 .trip-stats span { font-size: 9.5px; color: var(--dim); }
+
+.trip-cands { display: none; text-align: right; margin-bottom: 14px; }
+.trip-cands.show { display: block; }
+.cand-title { font-size: 13px; font-weight: 700; color: var(--amber-hi); margin-bottom: 8px; line-height: 1.6; }
+.cand-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; margin-bottom: 6px;
+  background: rgba(255, 179, 71, 0.07); border: 1px solid var(--line); border-radius: 12px;
+}
+.cand-info { font: 700 13px var(--digits); color: var(--ink); }
+.cand-acts { display: flex; gap: 6px; }
+.cand-yes, .cand-no {
+  border: none; border-radius: 9px; padding: 7px 12px; font: 700 12px "Plex Arabic", sans-serif; cursor: pointer;
+}
+.cand-yes { background: linear-gradient(160deg, #ffc35e, #ff9f1c); color: #1d1304; }
+.cand-no { background: rgba(255, 255, 255, 0.08); color: var(--dim); }
+.cand-done { font: 700 13px "Plex Arabic", sans-serif; color: var(--good); }
 
 @media (max-height: 620px) {
   .speed-num { font-size: 60px; min-width: 96px; }
