@@ -1,7 +1,7 @@
 // أسهَر service worker — app shell precache + capped runtime tile cache
-const SHELL = "ashar-shell-v8";
-const TILES = "ashar-tiles-v8";
-const DATA = "ashar-data-v8";
+const SHELL = "ashar-shell-v12";
+const TILES = "ashar-tiles-v12";
+const DATA = "ashar-data-v12";
 const TILE_CAP = 400;
 
 const SHELL_FILES = [
@@ -23,7 +23,14 @@ const SHELL_FILES = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));
+  // fetch each shell file fresh from the network (bypass the HTTP cache) so a
+  // new SW version never precaches a stale file left over from a prior version
+  e.waitUntil(
+    caches.open(SHELL)
+      .then((c) => Promise.all(SHELL_FILES.map((u) =>
+        fetch(new Request(u, { cache: "reload" })).then((res) => c.put(u, res)))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {

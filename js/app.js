@@ -8,6 +8,8 @@ const MIN_ALERT_KMH = 25;
 const OVER_MARGIN = 4;     // km/h grace before "you're speeding"
 const OVER_BIG = 12;       // km/h over → urgent
 const LIMIT_PRESETS = [80, 100, 120, 140];
+const SEED_ROOM = "__seed__"; // shared reference DB (e.g. SCDB), pulled once + cached
+const SEED_VERSION = "scdb-2026-06"; // bump to force every device to re-pull the seed
 
 // ---------- state ----------
 const S = {
@@ -40,8 +42,9 @@ function loadUserCams() {
   try { return JSON.parse(localStorage.getItem("ashar.usercams.v1") || "[]"); } catch { return []; }
 }
 function saveUserCams() {
+  // seed (SCDB) is cached separately under "ashar.seed"; never duplicate it here
   localStorage.setItem("ashar.usercams.v1",
-    JSON.stringify(S.cams.filter((c) => c.src !== "osm")));
+    JSON.stringify(S.cams.filter((c) => c.src !== "osm" && c.src !== "seed")));
 }
 
 async function loadCams() {
@@ -103,9 +106,10 @@ function refreshMarkers() {
   }
 }
 
+const isMine = (c) => c.src === "user" || c.src === "family"; // people-marked (vs reference DBs)
 function camIconHtml(c) {
   const inner = c.sp ? c.sp : "&#9679;";
-  return `<div class="cam-sign ${c.src !== "osm" ? "mine" : ""}">${inner}</div>`;
+  return `<div class="cam-sign ${isMine(c) ? "mine" : ""}">${inner}</div>`;
 }
 function addCamMarker(c) {
   if (camMarkers[c.id]) return; // already drawn
@@ -113,11 +117,12 @@ function addCamMarker(c) {
     icon: L.divIcon({ className: "cam-wrap", html: camIconHtml(c), iconSize: [30, 30], iconAnchor: [15, 15] }),
     keyboard: false,
   });
-  if (c.src !== "osm") {
+  if (isMine(c)) {
     const who = c.src === "family" ? `كاميرا العائلة${c.by ? " — " + c.by : ""}` : "كاميرا (أنت أضفتها)";
     m.bindPopup(`<div class="pop"><b>${who}</b><br>الحد: ${c.sp || "غير محدد"}<br><button class="pop-del" data-id="${c.id}">حذف</button></div>`);
   } else {
-    m.bindPopup(`<div class="pop"><b>ساهر</b><br>الحد: ${c.sp || "غير معروف"}${c.dir >= 0 ? "<br>اتجاهية" : ""}<br><span class="pop-src">المصدر: OSM</span></div>`);
+    const src = c.src === "seed" ? "قاعدة SCDB" : c.src === "import" ? "ملف مستورد" : "OSM";
+    m.bindPopup(`<div class="pop"><b>ساهر</b><br>الحد: ${c.sp || "غير معروف"}${c.dir >= 0 ? "<br>اتجاهية" : ""}<br><span class="pop-src">المصدر: ${src}</span></div>`);
   }
   m.addTo(map);
   camMarkers[c.id] = m;
@@ -585,9 +590,9 @@ function renderList(which) {
   el.innerHTML = arr.length
     ? arr.slice(0, 80).map(({ c, d }) => `
       <div class="row" data-id="${c.id}">
-        <div class="row-sign ${c.src !== "osm" ? "mine" : ""}">${c.sp || "•"}</div>
-        <div class="row-txt"><b>${c.src === "family" ? (c.by || "العائلة") : c.src !== "osm" ? "كاميرتك" : "ساهر"}</b><span>${fmtDist(d)}</span></div>
-        ${c.src !== "osm" ? `<button class="row-del" data-id="${c.id}">حذف</button>` : ""}
+        <div class="row-sign ${isMine(c) ? "mine" : ""}">${c.sp || "•"}</div>
+        <div class="row-txt"><b>${c.src === "family" ? (c.by || "العائلة") : c.src === "user" ? "كاميرتك" : "ساهر"}</b><span>${fmtDist(d)}</span></div>
+        ${isMine(c) ? `<button class="row-del" data-id="${c.id}">حذف</button>` : ""}
       </div>`).join("")
     : `<div class="empty">${which === "paneRoute" ? "ما فيه كاميرات موثّقة على الخط — استخدم زر «كاميرا هنا» وقت تشوف وحدة" : "ما فيه كاميرات قريبة بنطاق 30 كم"}</div>`;
 }
@@ -848,6 +853,47 @@ async function pullAndReconcile() {
   return added;
 }
 
+// shared reference seed (SCDB): pulled ONCE per device then cached locally —
+// never polled, never in the family room, so it can't slow the live sync.
+async function loadSeed() {
+  if (!syncEnabled()) return;
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem("ashar.seed") || "null"); } catch {}
+  // use cache only if it matches the current seed version (guards partial/stale caches)
+  if (cached && cached.length && localStorage.getItem("ashar.seedV") === SEED_VERSION) {
+    mergeSeed(cached);
+    return;
+  }
+  try {
+    const rows = await pullCameras(SEED_ROOM);
+    if (rows.length) {
+      const compact = rows.map((r) => [r.lat, r.lon, r.sp | 0]);
+      localStorage.setItem("ashar.seed", JSON.stringify(compact));
+      localStorage.setItem("ashar.seedV", SEED_VERSION);
+      mergeSeed(compact);
+    }
+  } catch { /* offline / not provisioned yet — silent, retry next launch */ }
+}
+function mergeSeed(compact) {
+  const CELL = 0.0004; // ~40m dedup vs OSM + crowd + already-loaded cams
+  const gkey = (la, lo) => Math.round(la / CELL) + "_" + Math.round(lo / CELL);
+  const occ = new Set(S.cams.map((c) => gkey(c.lat, c.lon)));
+  const near = (la, lo) => {
+    const a = Math.round(la / CELL), b = Math.round(lo / CELL);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++)
+      if (occ.has(a + i + "_" + (b + j))) return true;
+    return false;
+  };
+  let added = 0;
+  for (const [la, lo, sp] of compact) {
+    if (near(la, lo)) continue;
+    S.cams.push({ id: "s_" + Math.round(la * 1e5) + "_" + Math.round(lo * 1e5), lat: la, lon: lo, sp: sp | 0, dir: -1, src: "seed" });
+    occ.add(gkey(la, lo));
+    added++;
+  }
+  if (added) { refreshMarkers(); $("camCount").textContent = S.cams.length; }
+}
+
 function startPoll() {
   if (!syncEnabled() || !S.room || S.poll) return;
   const tick = () => { if (document.visibilityState === "visible") pullAndReconcile().catch(() => {}); };
@@ -967,6 +1013,7 @@ async function boot() {
   importFromHash();
   iosInstallHint();
   updateSyncUI();
+  loadSeed(); // shared SCDB reference (once + cached) — independent of family room
   if (syncEnabled() && S.room) { pullAndReconcile().catch(() => {}); startPoll(); }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && syncEnabled() && S.room) pullAndReconcile().catch(() => {});

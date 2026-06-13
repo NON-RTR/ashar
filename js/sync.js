@@ -27,15 +27,23 @@ export function genRoom() {
   return s;
 }
 
-// pull all live cameras for a family room
+// pull all live cameras for a room, paginating past PostgREST's 1000-row cap
+// (the SCDB seed is several thousand rows; a family room is usually small)
 export async function pullCameras(room) {
   if (!syncEnabled() || !room) return [];
-  const url = rest(
-    `cameras?room=eq.${encodeURIComponent(room)}&deleted=eq.false&select=id,lat,lon,sp,dir,by`
-  );
-  const r = await fetch(url, { headers: hdrs() });
-  if (!r.ok) throw new Error("pull " + r.status);
-  return r.json();
+  const out = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const url = rest(
+      `cameras?room=eq.${encodeURIComponent(room)}&deleted=eq.false&select=id,lat,lon,sp,dir,by&limit=${PAGE}&offset=${from}`
+    );
+    const r = await fetch(url, { headers: hdrs() });
+    if (!r.ok) throw new Error("pull " + r.status);
+    const rows = await r.json();
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
 }
 
 // upsert one camera (shared with the family)
