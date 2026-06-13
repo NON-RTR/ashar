@@ -77,14 +77,30 @@ function initMap() {
     }).addTo(map);
   });
   map.on("dragstart", () => { S.follow = false; $("recenter").classList.add("show"); });
-
-  for (const c of S.cams) addCamMarker(c);
+  map.on("moveend zoomend", refreshMarkers);
 
   userMarker = L.marker([21.54, 39.19], {
     icon: L.divIcon({ className: "me-wrap", html: '<div class="me-cone" id="meCone"></div><div class="me-dot"></div>', iconSize: [44, 44], iconAnchor: [22, 22] }),
     interactive: false, keyboard: false,
   });
   accCircle = L.circle([21.54, 39.19], { radius: 30, weight: 0, fillColor: "#ffb347", fillOpacity: 0.08, interactive: false });
+  refreshMarkers();
+}
+
+// Only render markers inside the current view — keeps thousands of cameras
+// (e.g. an SCDB import) from choking the map. Alert logic uses S.cams data,
+// not markers, so coverage is unaffected by what's drawn.
+function refreshMarkers() {
+  if (!map) return;
+  const b = map.getBounds().pad(0.25);
+  for (const c of S.cams) {
+    const inView = b.contains([c.lat, c.lon]);
+    if (inView) addCamMarker(c);
+    else if (camMarkers[c.id] && c.id !== S.activeId) {
+      map.removeLayer(camMarkers[c.id]);
+      delete camMarkers[c.id];
+    }
+  }
 }
 
 function camIconHtml(c) {
@@ -92,6 +108,7 @@ function camIconHtml(c) {
   return `<div class="cam-sign ${c.src !== "osm" ? "mine" : ""}">${inner}</div>`;
 }
 function addCamMarker(c) {
+  if (camMarkers[c.id]) return; // already drawn
   const m = L.marker([c.lat, c.lon], {
     icon: L.divIcon({ className: "cam-wrap", html: camIconHtml(c), iconSize: [30, 30], iconAnchor: [15, 15] }),
     keyboard: false,
@@ -569,17 +586,29 @@ $("fileImport").addEventListener("change", async (e) => {
     }
   } catch (err) { toast("ملف غير مفهوم"); return; }
   pts = pts.filter((p) => p.lat >= 15 && p.lat <= 34 && p.lon >= 33 && p.lon <= 57);
-  ensureRoom();
+  // Imports stay LOCAL on this device (never pushed to the family cloud):
+  // respects third-party data licenses (e.g. SCDB) and keeps the shared DB
+  // clean + light. Each family member imports their own copy.
+  // Fast spatial dedup (~50m grid) so importing thousands doesn't freeze.
+  const CELL = 0.0005;
+  const gkey = (la, lo) => Math.round(la / CELL) + "_" + Math.round(lo / CELL);
+  const occupied = new Set(S.cams.map((c) => gkey(c.lat, c.lon)));
+  const taken = (la, lo) => {
+    const a = Math.round(la / CELL), b = Math.round(lo / CELL);
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++)
+      if (occupied.has(a + i + "_" + (b + j))) return true;
+    return false;
+  };
   let added = 0;
-  const fresh = [];
   for (const p of pts) {
-    if (S.cams.some((c) => haversine(c.lat, c.lon, p.lat, p.lon) < 40)) continue;
-    const c = { id: "i" + Date.now() + "_" + added, lat: p.lat, lon: p.lon, sp: p.sp, dir: -1, src: S.room ? "family" : "import", by: familyName() };
-    S.cams.push(c); addCamMarker(c); fresh.push(c); added++;
+    if (taken(p.lat, p.lon)) continue;
+    const c = { id: "i" + Date.now() + "_" + added, lat: p.lat, lon: p.lon, sp: p.sp, dir: -1, src: "import", by: "" };
+    S.cams.push(c); occupied.add(gkey(p.lat, p.lon)); added++;
   }
   saveUserCams();
-  if (S.room && fresh.length) pushMany(S.room, fresh).catch(() => {});
-  toast(`أضفنا ${added} كاميرا من الملف`);
+  refreshMarkers();
+  $("camCount").textContent = S.cams.length;
+  toast(`أضفنا ${added} كاميرا محلياً (خاصة بجهازك)`);
   e.target.value = "";
 });
 
@@ -655,9 +684,9 @@ function importFromHash() {
         dir: typeof dir === "number" ? dir : -1, src: "family",
         by: String(by || j.by || "").slice(0, 20),
       };
-      S.cams.push(c); addCamMarker(c); added++;
+      S.cams.push(c); added++;
     }
-    if (added) saveUserCams();
+    if (added) { saveUserCams(); refreshMarkers(); }
     const msg = added
       ? `وصلتك ${added} كاميرا من ${j.by || "العائلة"} ✓`
       : "كاميرات الرابط عندك من قبل ✓";
@@ -727,16 +756,18 @@ async function pullAndReconcile() {
       continue;
     }
     const c = { id: r.id, lat: r.lat, lon: r.lon, sp: r.sp | 0, dir: r.dir, src: "family", by: r.by || "" };
-    S.cams.push(c); addCamMarker(c); added++;
+    S.cams.push(c); added++;
   }
   // a family camera that vanished server-side was deleted by someone → drop it
+  let removed = 0;
   for (const c of [...S.cams]) {
     if (c.src === "family" && !serverIds.has(c.id)) {
       S.cams = S.cams.filter((x) => x.id !== c.id);
       if (camMarkers[c.id]) { map.removeLayer(camMarkers[c.id]); delete camMarkers[c.id]; }
+      removed++;
     }
   }
-  if (added) saveUserCams();
+  if (added || removed) { saveUserCams(); refreshMarkers(); }
   $("camCount").textContent = S.cams.length;
   return added;
 }
@@ -758,6 +789,7 @@ function updateSyncUI() {
 
 // minimal support/debug handle (also used to verify sync without the UI)
 window.__ASHAR.sync = { join: joinRoom, reconcile: pullAndReconcile, room: () => S.room, count: () => S.cams.length };
+window.__ASHAR.dbg = { map: () => map, refresh: refreshMarkers, rendered: () => Object.keys(camMarkers).length };
 
 // ---------- iOS install hint ----------
 function iosInstallHint() {
@@ -855,6 +887,7 @@ async function boot() {
   $("btnEndTrip").addEventListener("click", () => { sheet.classList.remove("open"); endTripAndReport(); });
   $("tripClose").addEventListener("click", () => $("tripReport").classList.remove("show"));
 
+  window.addEventListener("resize", () => { map.invalidateSize(); refreshMarkers(); });
   importFromHash();
   iosInstallHint();
   updateSyncUI();
@@ -866,6 +899,10 @@ async function boot() {
   const params = new URLSearchParams(location.search);
   const begin = (demo) => {
     $("startOverlay").classList.add("gone");
+    // the map was created behind the overlay; make sure Leaflet knows its real
+    // size now so viewport marker rendering works from the first frame
+    map.invalidateSize();
+    refreshMarkers();
     snd.unlock();
     keepAwake();
     startTrip();
