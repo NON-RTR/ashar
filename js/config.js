@@ -8,6 +8,6 @@
 // لو تركتهم فاضيين، التطبيق يشتغل محلياً + روابط المشاركة كما هو، بدون مزامنة.
 
 export const CONFIG = {
-  SUPABASE_URL: "",
-  SUPABASE_ANON_KEY: "",
+  SUPABASE_URL: "https://vguxkewwerxvhrdnqsyv.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_lIgypuHCF4maE6LL8beFvg_WBfxTBLJ",
 };
