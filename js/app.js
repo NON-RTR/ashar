@@ -1,9 +1,12 @@
 import { haversine, bearing, angDiff, destPoint, fmtDist, clamp } from "./geo.js";
 import { Sounder } from "./audio.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.2.0";
 const CORRIDOR = { latMin: 21.2, latMax: 24.35, lonMin: 37.6, lonMax: 39.5 }; // جدة–ينبع
 const MIN_ALERT_KMH = 25;
+const OVER_MARGIN = 4;     // km/h grace before "you're speeding"
+const OVER_BIG = 12;       // km/h over → urgent
+const LIMIT_PRESETS = [80, 100, 120, 140];
 
 // ---------- state ----------
 const S = {
@@ -14,7 +17,11 @@ const S = {
   alerted: {},         // id -> {stage, prevDist, overAt}
   activeId: null,
   demo: null,
-  settings: { sound: true, voice: true, strictDir: false },
+  limit: 120,          // active road speed limit (km/h) — the safety baseline
+  over: false,         // currently exceeding the active limit
+  overAt: 0,           // last overspeed sound time
+  trip: null,          // accumulates the drive for the end-of-trip safety report
+  settings: { sound: true, voice: true, strictDir: false, limit: 120, safety: true },
 };
 window.__ASHAR = { version: VERSION, alerts: [], fixes: 0 };
 
@@ -203,39 +210,77 @@ function handleFix(raw) {
 
   // nearest-info mini line
   if (best) {
-    $("nextMini").textContent = `أقرب ساهر قدامك: ${fmtDist(best.dist)}`;
+    $("nextMini").textContent = `أقرب كاميرا قدامك: ${fmtDist(best.dist)}`;
   } else {
-    $("nextMini").textContent = "ما فيه كاميرات قدامك بنطاق 2.5 كم";
+    $("nextMini").textContent = "ما فيه كاميرات قدامك بنطاق 2.5 كم — انتبه لسرعتك";
   }
 
-  if (!best || fix.kmh < MIN_ALERT_KMH) {
-    if (!best) clearAlertUI();
+  // fire / update camera alerts (independent of overspeed)
+  if (best && fix.kmh >= MIN_ALERT_KMH) {
+    const { cam, dist, st } = best;
+    if (dist <= d2 && st.stage < 2) {
+      st.stage = 2;
+      fireAlert(cam, dist, 2);
+    } else if (dist <= d1 && st.stage < 1) {
+      st.stage = 1;
+      fireAlert(cam, dist, 1);
+    } else if (S.activeId === cam.id && st.stage > 0) {
+      updateAlertUI(cam, dist, d1);
+    }
+  } else if (!best) {
+    clearAlertUI();
+  }
+
+  // ---- continuous safety: warn whenever over the limit, ANYWHERE (the root cause) ----
+  const nearCam = best && best.cam.sp > 0 && best.dist <= d1;
+  const activeLimit = nearCam ? Math.min(S.limit, best.cam.sp) : S.limit;
+  S.activeLimit = activeLimit;
+  updateLimitChip(activeLimit, nearCam);
+  runOverspeed(fix, activeLimit);
+
+  // accumulate the trip for the end-of-drive safety report
+  trackTrip(fix);
+}
+
+// Always-on overspeed engine — this is what genuinely curbs speeding, not just camera dodging.
+function runOverspeed(fix, limit) {
+  const sv = $("speedVal");
+  if (!S.settings.safety || fix.kmh < MIN_ALERT_KMH || !limit) {
+    S.over = false;
     document.body.classList.remove("over");
-    $("speedVal").classList.remove("bad", "warn");
+    sv.classList.remove("bad", "warn");
     return;
   }
-
-  const { cam, dist, st } = best;
-  if (dist <= d2 && st.stage < 2) {
-    st.stage = 2;
-    fireAlert(cam, dist, 2);
-  } else if (dist <= d1 && st.stage < 1) {
-    st.stage = 1;
-    fireAlert(cam, dist, 1);
-  } else if (S.activeId === cam.id && st.stage > 0) {
-    updateAlertUI(cam, dist, d1);
-  }
-
-  // overspeed handling near an active camera
-  const over = st.stage > 0 && cam.sp > 0 && fix.kmh > cam.sp + 3 && dist <= d1;
+  const over = fix.kmh > limit + OVER_MARGIN;
+  const big = fix.kmh > limit + OVER_BIG;
+  S.over = over;
   document.body.classList.toggle("over", over);
-  $("speedVal").classList.toggle("bad", over);
-  $("speedVal").classList.toggle("warn", !over && st.stage > 0);
+  sv.classList.toggle("bad", over);
+  sv.classList.toggle("warn", !over && S.activeId != null); // near a camera but compliant
   if (over) {
     const now = Date.now();
-    if (now - (st.overAt || 0) > 2500) { st.overAt = now; snd.overspeed(); }
-    snd.speak("خفف السرعة", "over", 8000);
+    const gap = big ? 2200 : 5200;
+    if (now - S.overAt > gap) { S.overAt = now; big ? snd.overspeed() : snd.beeps(600, 1, 0.14); }
+    snd.speak("خفّف السرعة", "over", big ? 7000 : 13000);
   }
+}
+
+function trackTrip(fix) {
+  const t = S.trip;
+  if (!t || fix.kmh < MIN_ALERT_KMH) return;
+  t.movingFixes++;
+  t.maxKmh = Math.max(t.maxKmh, fix.kmh);
+  if (t.lastPt) {
+    const d = haversine(t.lastPt.lat, t.lastPt.lon, fix.lat, fix.lon);
+    if (d >= 3 && d < 600) t.distM += d;
+  }
+  t.lastPt = { lat: fix.lat, lon: fix.lon };
+  if (S.over) {
+    t.overFixes++;
+    t.maxOvershoot = Math.max(t.maxOvershoot, fix.kmh - (S.activeLimit || S.limit));
+  }
+  if (!t.start) t.start = fix.ts;
+  t.end = fix.ts;
 }
 
 function fireAlert(cam, dist, stage) {
@@ -269,9 +314,61 @@ function clearAlertUI(passed = false) {
   if (S.activeId == null) return;
   camMarkers[S.activeId]?.getElement()?.classList.remove("active");
   $("alertCard").classList.remove("show", "s1", "s2");
-  document.body.classList.remove("over");
   if (passed) { snd.ok(); }
   S.activeId = null;
+}
+
+// ---------- speed-limit chip (live safety baseline) ----------
+function updateLimitChip(limit, nearCam) {
+  const chip = $("limitChip");
+  if (!chip) return;
+  $("limitVal").textContent = limit || "—";
+  chip.classList.toggle("over", S.over);
+  chip.classList.toggle("cam", !!nearCam);
+}
+function setLimit(v) {
+  S.limit = v;
+  S.settings.limit = v;
+  saveSettings();
+  updateLimitChip(S.activeLimit || v, false);
+  $("limitPop")?.classList.remove("show");
+}
+
+// ---------- trip safety report (reinforces the behaviour that actually matters) ----------
+function startTrip() {
+  S.trip = { movingFixes: 0, overFixes: 0, maxKmh: 0, maxOvershoot: 0, distM: 0, start: 0, end: 0, lastPt: null };
+}
+function endTripAndReport() {
+  const t = S.trip;
+  S.trip = null;
+  if (!t || t.movingFixes < 5) { toast("الرحلة قصيرة — ما فيه تقرير"); return; }
+  const pctOver = t.movingFixes ? (t.overFixes / t.movingFixes) * 100 : 0;
+  const score = Math.round(clamp(100 - pctOver * 1.2 - t.maxOvershoot * 0.6, 0, 100));
+  const mins = t.start && t.end ? Math.max(1, Math.round((t.end - t.start) / 60000)) : 0;
+  showTripReport({
+    score,
+    km: t.distM / 1000,
+    mins,
+    maxKmh: Math.round(t.maxKmh),
+    pctOver: Math.round(pctOver),
+    alerts: window.__ASHAR.alerts.length,
+  });
+  console.log("ASHAR_TRIP", JSON.stringify({ score, km: +(t.distM / 1000).toFixed(1), mins, maxKmh: Math.round(t.maxKmh), pctOver: Math.round(pctOver) }));
+}
+function showTripReport(r) {
+  const grade = r.score >= 85 ? "good" : r.score >= 60 ? "mid" : "bad";
+  const msg = r.score >= 85 ? "قيادة آمنة — الله يحفظك 🤍"
+    : r.score >= 60 ? "كويس، بس تقدر أهدى شوي"
+    : "خفّف السرعة الرحلة الجاية — سلامتك أهم";
+  $("tripScore").textContent = r.score;
+  $("tripScore").className = "trip-score " + grade;
+  $("tripGradeMsg").textContent = msg;
+  $("tripKm").textContent = r.km >= 10 ? Math.round(r.km) : r.km.toFixed(1);
+  $("tripMins").textContent = r.mins;
+  $("tripMax").textContent = r.maxKmh;
+  $("tripOver").textContent = r.pctOver + "٪";
+  $("tripAlerts").textContent = r.alerts;
+  $("tripReport").classList.add("show");
 }
 
 // ---------- family identity ----------
@@ -418,6 +515,7 @@ function bindToggle(id, key) {
 function applySettings() {
   snd.sound = S.settings.sound;
   snd.voice = S.settings.voice;
+  if (S.settings.limit) S.limit = S.settings.limit;
 }
 
 // ---------- import / export ----------
@@ -596,8 +694,8 @@ function startDemo(fast = 1) {
 function stopDemo() {
   clearInterval(S.demo); S.demo = null;
   $("demoBadge").classList.remove("show");
-  toast("انتهت التجربة");
   console.log("ASHAR_DEMO_END", JSON.stringify({ alerts: window.__ASHAR.alerts.length }));
+  endTripAndReport();
 }
 
 // ---------- boot ----------
@@ -608,6 +706,7 @@ async function boot() {
   bindToggle("setSound", "sound");
   bindToggle("setVoice", "voice");
   bindToggle("setStrict", "strictDir");
+  bindToggle("setSafety", "safety");
   renderList("paneNear");
 
   $("setName").value = familyName();
@@ -615,6 +714,20 @@ async function boot() {
     localStorage.setItem("ashar.name", $("setName").value.trim().slice(0, 20));
     localStorage.setItem("ashar.nameAsked", "1");
   });
+
+  // speed-limit chip + presets
+  updateLimitChip(S.limit, false);
+  $("limitChip").addEventListener("click", () => $("limitPop").classList.toggle("show"));
+  $("limitPop").innerHTML = LIMIT_PRESETS.map((p) => `<button class="lp" data-lim="${p}">${p}</button>`).join("");
+  $("limitPop").addEventListener("click", (e) => {
+    const b = e.target.closest(".lp");
+    if (b) { setLimit(+b.dataset.lim); toast(`الحد ${b.dataset.lim} كم/س`); }
+  });
+  $("setLimit").value = S.limit;
+  $("setLimit").addEventListener("change", () => setLimit(clamp(parseInt($("setLimit").value) || 120, 30, 180)));
+  $("btnEndTrip").addEventListener("click", () => { sheet.classList.remove("open"); endTripAndReport(); });
+  $("tripClose").addEventListener("click", () => $("tripReport").classList.remove("show"));
+
   importFromHash();
   iosInstallHint();
 
@@ -623,6 +736,7 @@ async function boot() {
     $("startOverlay").classList.add("gone");
     snd.unlock();
     keepAwake();
+    startTrip();
     if (demo) startDemo(+params.get("fast") || (params.get("demo") ? 4 : 1));
     else startGPS();
   };

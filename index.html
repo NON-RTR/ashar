@@ -6,7 +6,8 @@
 <meta name="theme-color" content="#070b10">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>أسهَر — رفيقك ضد ساهر</title>
+<meta name="description" content="رفيق القيادة الآمنة — ينبّهك لو تجاوزت السرعة النظامية وقبل كاميرات الطريق، مع تقرير أمان لكل رحلة.">
+<title>أسهَر — رفيق القيادة الآمنة</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
@@ -37,9 +38,16 @@
 
   <!-- speed cluster -->
   <div class="cluster">
-    <div class="speed-ring">
-      <div class="speed-num" id="speedVal">0</div>
-      <div class="speed-unit">كم/س</div>
+    <div class="cluster-row">
+      <div class="speed-ring">
+        <div class="speed-num" id="speedVal">0</div>
+        <div class="speed-unit">كم/س</div>
+      </div>
+      <button class="limit-chip" id="limitChip" title="الحد النظامي — اضغط للتغيير">
+        <span class="limit-sign"><b id="limitVal">120</b></span>
+        <span class="limit-lbl">الحد</span>
+      </button>
+      <div class="limit-pop" id="limitPop"></div>
     </div>
     <div class="next-mini" id="nextMini">بانتظار إشارة GPS…</div>
   </div>
@@ -82,9 +90,14 @@
     <div class="set-actions">
       <button class="btn btn-share" id="btnShare">📤 شارك كاميراتك مع العائلة (رابط)</button>
     </div>
+    <label class="set-row"><span>تنبيه تجاوز السرعة<small>ينبّهك بأي مكان لو زدت عن الحد — مو بس عند الكاميرات</small></span><input type="checkbox" id="setSafety"><i></i></label>
+    <label class="set-row"><span>الحد الافتراضي للطريق<small>السرعة اللي ينبّهك لو تجاوزتها (الخط السريع غالباً 120)</small></span><input type="number" id="setLimit" class="name-inp num-inp" min="30" max="180" step="10"></label>
     <label class="set-row"><span>تنبيه صوتي (بيب)</span><input type="checkbox" id="setSound"><i></i></label>
     <label class="set-row"><span>تنبيه كلامي</span><input type="checkbox" id="setVoice"><i></i></label>
     <label class="set-row"><span>وضع الاتجاه الصارم<small>تجاهل كاميرات الاتجاه المعاكس — قد يفوّت تنبيهات</small></span><input type="checkbox" id="setStrict"><i></i></label>
+    <div class="set-actions">
+      <button class="btn btn-end" id="btnEndTrip">🏁 إنهاء الرحلة وعرض التقرير</button>
+    </div>
     <div class="set-actions">
       <button class="btn" id="btnExport">تصدير كاميراتي</button>
       <label class="btn" for="fileImport">استيراد ملف (JSON/GPX/CSV)<input type="file" id="fileImport" accept=".json,.gpx,.csv" hidden></label>
@@ -111,7 +124,7 @@
       </svg>
     </div>
     <h1>أسهَر</h1>
-    <p class="tag">عينك اللي ما تنام… تصيد ساهر قبل لا يصيدك</p>
+    <p class="tag">رفيق طريقك — يخلّيك بالسرعة النظامية ويوصّلك بأمان</p>
     <button class="go" id="startBtn">ابدأ الرحلة</button>
     <button class="ghost" id="demoBtn">وضع التجربة (جدة)</button>
     <p class="start-fine"><span id="camCount">…</span> كاميرا محمّلة · ثبّت الجوال وشبكه بالشاحن<br>🔊 ارفع كتم الصوت — التنبيه الكلامي ما يُسمع والجوال مكتوم</p>
@@ -120,6 +133,23 @@
       <span>📲 خله تطبيق على جوالك: افتح بـ Safari ثم <b>مشاركة <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v13M8 7l4-4 4 4M5 11v9h14v-9"/></svg> ← إضافة إلى الصفحة الرئيسية</b></span>
       <button id="iosHintClose">فهمت</button>
     </div>
+  </div>
+</div>
+
+<!-- end-of-trip safety report -->
+<div class="dlg" id="tripReport">
+  <div class="dlg-box trip-box">
+    <p class="trip-cap">تقرير رحلتك</p>
+    <div class="trip-score good" id="tripScore">—</div>
+    <p class="trip-grade" id="tripGradeMsg"></p>
+    <div class="trip-stats">
+      <div><b id="tripKm">0</b><span>كم</span></div>
+      <div><b id="tripMins">0</b><span>دقيقة</span></div>
+      <div><b id="tripMax">0</b><span>أعلى سرعة</span></div>
+      <div><b id="tripOver">0٪</b><span>وقت التجاوز</span></div>
+      <div><b id="tripAlerts">0</b><span>تنبيهات</span></div>
+    </div>
+    <button class="go small" id="tripClose">تمام</button>
   </div>
 </div>
 
