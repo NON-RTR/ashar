@@ -1,5 +1,6 @@
 import { haversine, bearing, angDiff, destPoint, fmtDist, clamp } from "./geo.js";
 import { Sounder } from "./audio.js";
+import { syncEnabled, genRoom, pullCameras, pushCamera, pushMany, removeCamera } from "./sync.js";
 
 const VERSION = "1.2.0";
 const CORRIDOR = { latMin: 21.2, latMax: 24.35, lonMin: 37.6, lonMax: 39.5 }; // جدة–ينبع
@@ -21,6 +22,8 @@ const S = {
   over: false,         // currently exceeding the active limit
   overAt: 0,           // last overspeed sound time
   trip: null,          // accumulates the drive for the end-of-trip safety report
+  room: localStorage.getItem("ashar.room") || "", // family sync code (empty = solo)
+  poll: null,
   settings: { sound: true, voice: true, strictDir: false, limit: 120, safety: true },
 };
 window.__ASHAR = { version: VERSION, alerts: [], fixes: 0 };
@@ -109,6 +112,7 @@ document.addEventListener("click", (e) => {
   S.cams = S.cams.filter((c) => c.id !== id);
   if (camMarkers[id]) { map.removeLayer(camMarkers[id]); delete camMarkers[id]; }
   saveUserCams(); map.closePopup(); toast("انحذفت");
+  syncRemove(id);
 });
 
 // ---------- GPS ----------
@@ -399,15 +403,17 @@ $("nameInput").addEventListener("keydown", (e) => { if (e.key === "Enter") close
 // ---------- add camera (one tap) ----------
 let lastAdded = null;
 function addCamHere() {
+  ensureRoom(); // auto-creates a family room on first mark when sync is configured
   const c = {
     id: "u" + Date.now(), lat: S.fix.lat, lon: S.fix.lon,
-    sp: 0, dir: -1, src: "user", by: familyName(),
+    sp: 0, dir: -1, src: S.room ? "family" : "user", by: familyName(),
     heading: S.fix.heading ?? -1, at: new Date().toISOString(),
   };
   S.cams.push(c); addCamMarker(c); saveUserCams();
   lastAdded = c.id;
   toastCam();
   snd.ok();
+  syncPush(c);
 }
 $("fabCam").addEventListener("click", () => {
   if (!S.fix) { toast("بانتظار إشارة GPS…"); return; }
@@ -427,17 +433,20 @@ document.querySelectorAll("#toastCam .chip[data-sp]").forEach((b) =>
     if (cam) {
       cam.sp = +b.dataset.sp; saveUserCams();
       camMarkers[cam.id]?.setIcon(L.divIcon({ className: "cam-wrap", html: camIconHtml(cam), iconSize: [30, 30], iconAnchor: [15, 15] }));
+      syncPush(cam); // share the corrected limit with the family
     }
     $("toastCam").classList.remove("show");
   })
 );
 $("undoCam").addEventListener("click", () => {
   if (!lastAdded) return;
-  S.cams = S.cams.filter((c) => c.id !== lastAdded);
-  if (camMarkers[lastAdded]) { map.removeLayer(camMarkers[lastAdded]); delete camMarkers[lastAdded]; }
+  const id = lastAdded;
+  S.cams = S.cams.filter((c) => c.id !== id);
+  if (camMarkers[id]) { map.removeLayer(camMarkers[id]); delete camMarkers[id]; }
   saveUserCams(); lastAdded = null;
   $("toastCam").classList.remove("show");
   toast("تراجعنا ✓");
+  syncRemove(id);
 });
 
 function toast(msg) {
@@ -497,6 +506,7 @@ document.addEventListener("click", (e) => {
     if (camMarkers[id]) { map.removeLayer(camMarkers[id]); delete camMarkers[id]; }
     saveUserCams();
     del.closest(".row").remove();
+    syncRemove(id);
     return;
   }
   const row = e.target.closest(".row");
@@ -559,13 +569,16 @@ $("fileImport").addEventListener("change", async (e) => {
     }
   } catch (err) { toast("ملف غير مفهوم"); return; }
   pts = pts.filter((p) => p.lat >= 15 && p.lat <= 34 && p.lon >= 33 && p.lon <= 57);
+  ensureRoom();
   let added = 0;
+  const fresh = [];
   for (const p of pts) {
     if (S.cams.some((c) => haversine(c.lat, c.lon, p.lat, p.lon) < 40)) continue;
-    const c = { id: "i" + Date.now() + "_" + added, lat: p.lat, lon: p.lon, sp: p.sp, dir: -1, src: "import" };
-    S.cams.push(c); addCamMarker(c); added++;
+    const c = { id: "i" + Date.now() + "_" + added, lat: p.lat, lon: p.lon, sp: p.sp, dir: -1, src: S.room ? "family" : "import", by: familyName() };
+    S.cams.push(c); addCamMarker(c); fresh.push(c); added++;
   }
   saveUserCams();
+  if (S.room && fresh.length) pushMany(S.room, fresh).catch(() => {});
   toast(`أضفنا ${added} كاميرا من الملف`);
   e.target.value = "";
 });
@@ -585,12 +598,27 @@ function buildShareUrl() {
 }
 window.__ASHAR.buildShareUrl = buildShareUrl;
 
+function buildInviteUrl() {
+  const by = encodeURIComponent(familyName() || "العائلة");
+  return `${location.origin}${location.pathname}#join=${S.room}&by=${by}`;
+}
+
 $("btnShare").addEventListener("click", async () => {
-  const mine = S.cams.filter((c) => c.src !== "osm");
-  if (!mine.length) { toast("علّم كاميرات أول بزر «كاميرا هنا»"); return; }
   if (!familyName() && !localStorage.getItem("ashar.nameAsked")) { askName(() => $("btnShare").click()); return; }
-  const url = buildShareUrl();
-  const text = `🦅 أسهَر — ${mine.length} كاميرا ساهر من ${familyName() || "العائلة"}\nافتح الرابط على جوالك وبتنضاف تلقائياً:`;
+
+  let url, text;
+  if (syncEnabled()) {
+    // live family: share a one-time invite to the shared room; everything syncs after
+    ensureRoom();
+    url = buildInviteUrl();
+    text = `🦅 أسهَر — انضم لعائلة ${familyName() || ""}\nافتح الرابط مرة وحدة وبتتزامن كل الكاميرات تلقائياً (اللي يعلّمها أي واحد توصل الكل):`;
+  } else {
+    // no backend configured: share a snapshot of current cameras
+    const mine = S.cams.filter((c) => c.src !== "osm");
+    if (!mine.length) { toast("علّم كاميرات أول بزر «كاميرا هنا»"); return; }
+    url = buildShareUrl();
+    text = `🦅 أسهَر — ${mine.length} كاميرا من ${familyName() || "العائلة"}\nافتح الرابط على جوالك وبتنضاف تلقائياً:`;
+  }
   if (navigator.share) {
     try { await navigator.share({ title: "أسهَر", text, url }); return; }
     catch (e) { if (e.name === "AbortError") return; }
@@ -600,6 +628,16 @@ $("btnShare").addEventListener("click", async () => {
 });
 
 function importFromHash() {
+  // family invite: join a shared room, then pull everything
+  const j = location.hash.match(/^#join=([a-z0-9]+)(?:&by=(.*))?$/i);
+  if (j) {
+    history.replaceState(null, "", location.pathname + location.search);
+    const room = j[1];
+    const by = j[2] ? decodeURIComponent(j[2]) : "العائلة";
+    if (!syncEnabled()) { $("importNote").textContent = "رابط عائلة — لكن المزامنة غير مهيّأة على هذه النسخة"; return; }
+    joinRoom(room, by);
+    return;
+  }
   const m = location.hash.match(/^#add=(.+)$/);
   if (!m) return;
   history.replaceState(null, "", location.pathname + location.search);
@@ -631,6 +669,95 @@ function importFromHash() {
     toast("رابط غير صالح");
   }
 }
+
+// ---------- family sync (Supabase, offline-first) ----------
+function ensureRoom() {
+  if (syncEnabled() && !S.room) {
+    S.room = genRoom();
+    localStorage.setItem("ashar.room", S.room);
+    // share whatever the user already marked locally into the new family room
+    const mine = S.cams.filter((c) => c.src !== "osm");
+    mine.forEach((c) => (c.src = "family"));
+    pushMany(S.room, mine).catch(() => {});
+    updateSyncUI();
+    startPoll();
+  }
+}
+
+function syncPush(cam) {
+  if (!syncEnabled() || !S.room || cam.src === "osm") return;
+  pushCamera(S.room, cam).catch(() => toast("ما تمت المزامنة — بنحاول لاحقاً"));
+}
+function syncRemove(id) {
+  if (!syncEnabled() || !S.room) return;
+  removeCamera(S.room, id).catch(() => {});
+}
+
+async function joinRoom(room, by) {
+  S.room = room;
+  localStorage.setItem("ashar.room", room);
+  updateSyncUI();
+  try {
+    await pullAndReconcile();
+    // contribute any cameras this device already had to the family
+    const mine = S.cams.filter((c) => c.src !== "osm" && c.src !== "family");
+    mine.forEach((c) => (c.src = "family"));
+    if (mine.length) { saveUserCams(); await pushMany(room, mine).catch(() => {}); }
+    const msg = `انضممت لعائلة ${by} ✓`;
+    $("importNote").textContent = msg; toast(msg);
+    startPoll();
+  } catch {
+    $("importNote").textContent = "ما قدرنا نتصل بالمزامنة — تأكد من النت";
+  }
+}
+
+async function pullAndReconcile() {
+  if (!syncEnabled() || !S.room) return;
+  const rows = await pullCameras(S.room);
+  const serverIds = new Set(rows.map((r) => r.id));
+  const byId = new Map(S.cams.map((c) => [c.id, c]));
+  let added = 0;
+  for (const r of rows) {
+    const ex = byId.get(r.id);
+    if (ex) {
+      if (ex.sp !== (r.sp | 0) || ex.dir !== r.dir) {
+        ex.sp = r.sp | 0; ex.dir = r.dir; ex.by = r.by || ex.by;
+        camMarkers[ex.id]?.setIcon(L.divIcon({ className: "cam-wrap", html: camIconHtml(ex), iconSize: [30, 30], iconAnchor: [15, 15] }));
+      }
+      continue;
+    }
+    const c = { id: r.id, lat: r.lat, lon: r.lon, sp: r.sp | 0, dir: r.dir, src: "family", by: r.by || "" };
+    S.cams.push(c); addCamMarker(c); added++;
+  }
+  // a family camera that vanished server-side was deleted by someone → drop it
+  for (const c of [...S.cams]) {
+    if (c.src === "family" && !serverIds.has(c.id)) {
+      S.cams = S.cams.filter((x) => x.id !== c.id);
+      if (camMarkers[c.id]) { map.removeLayer(camMarkers[c.id]); delete camMarkers[c.id]; }
+    }
+  }
+  if (added) saveUserCams();
+  $("camCount").textContent = S.cams.length;
+  return added;
+}
+
+function startPoll() {
+  if (!syncEnabled() || !S.room || S.poll) return;
+  const tick = () => { if (document.visibilityState === "visible") pullAndReconcile().catch(() => {}); };
+  S.poll = setInterval(tick, 25000);
+  tick();
+}
+
+function updateSyncUI() {
+  const el = $("syncStatus");
+  if (!el) return;
+  if (!syncEnabled()) { el.textContent = "المزامنة غير مهيّأة — التطبيق يشتغل محلياً + روابط المشاركة"; el.className = "fine"; return; }
+  el.textContent = S.room ? `عائلتك متصلة · الرمز: ${S.room}` : "جاهز للمزامنة — علّم كاميرا أو شارك رابط الدعوة لإنشاء عائلتك";
+  el.className = "fine sync-on";
+}
+
+// minimal support/debug handle (also used to verify sync without the UI)
+window.__ASHAR.sync = { join: joinRoom, reconcile: pullAndReconcile, room: () => S.room, count: () => S.cams.length };
 
 // ---------- iOS install hint ----------
 function iosInstallHint() {
@@ -730,6 +857,11 @@ async function boot() {
 
   importFromHash();
   iosInstallHint();
+  updateSyncUI();
+  if (syncEnabled() && S.room) { pullAndReconcile().catch(() => {}); startPoll(); }
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && syncEnabled() && S.room) pullAndReconcile().catch(() => {});
+  });
 
   const params = new URLSearchParams(location.search);
   const begin = (demo) => {

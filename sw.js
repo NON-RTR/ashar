@@ -1,7 +1,7 @@
 // أسهَر service worker — app shell precache + capped runtime tile cache
-const SHELL = "ashar-shell-v4";
-const TILES = "ashar-tiles-v4";
-const DATA = "ashar-data-v4";
+const SHELL = "ashar-shell-v5";
+const TILES = "ashar-tiles-v5";
+const DATA = "ashar-data-v5";
 const TILE_CAP = 400;
 
 const SHELL_FILES = [
@@ -11,6 +11,8 @@ const SHELL_FILES = [
   "js/app.js",
   "js/geo.js",
   "js/audio.js",
+  "js/sync.js",
+  "js/config.js",
   "vendor/leaflet/leaflet.js",
   "vendor/leaflet/leaflet.css",
   "vendor/fonts/rajdhani-700.woff2",
@@ -62,8 +64,8 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // camera DB: network-first so refreshes land, cache as fallback
-  if (url.pathname.endsWith("data/cameras.json")) {
+  // camera DB + sync config: network-first so refreshes / new keys land, cache as fallback
+  if (url.pathname.endsWith("data/cameras.json") || url.pathname.endsWith("js/config.js")) {
     e.respondWith(
       caches.open(DATA).then(async (c) => {
         try {
