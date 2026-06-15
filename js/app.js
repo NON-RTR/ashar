@@ -24,6 +24,7 @@ const S = {
   over: false,         // currently exceeding the active limit
   overAt: 0,           // last overspeed sound time
   smoothKmh: 0,        // EMA-smoothed speed (kills GPS jitter)
+  overlayOn: false,    // native floating bubble currently shown
   trip: null,          // accumulates the drive for the end-of-trip safety report
   removed: loadRemoved(), // ids reported "gone" — never shown again
   room: localStorage.getItem("ashar.room") || "", // family sync code (empty = solo)
@@ -200,6 +201,38 @@ function startNativeGPS(BG) {
     }
   ).then((id) => { watchId = id; }).catch(() => gpsStatus("bad", "تعذّر تشغيل الموقع"));
 }
+
+// ---------- native floating overlay (Android only) ----------
+const overlayPlugin = () => (window.Capacitor?.isNativePlatform?.() ? window.Capacitor.Plugins?.Overlay : null);
+async function ensureOverlayPermission() {
+  const O = overlayPlugin();
+  if (!O) return false;
+  try {
+    const r = await O.hasPermission();
+    if (r?.granted) return true;
+    const r2 = await O.requestPermission();
+    return !!r2?.granted;
+  } catch { return false; }
+}
+function showOverlay() {
+  const O = overlayPlugin();
+  if (!O || S.overlayOn) return;
+  O.show().then(() => { S.overlayOn = true; }).catch(() => {});
+}
+function hideOverlay() {
+  const O = overlayPlugin();
+  if (!O) { S.overlayOn = false; return; }
+  O.hide().catch(() => {});
+  S.overlayOn = false;
+}
+function updateOverlay(fix, best) {
+  if (!S.overlayOn) return;
+  const O = overlayPlugin();
+  if (!O) return;
+  const state = S.over ? "over" : S.activeId ? "warn" : "normal";
+  const info = best && best.dist <= 2500 ? "ساهر " + fmtDist(best.dist) : "كم/س";
+  O.update({ speed: String(Math.round(fix.kmh)), info, state }).catch(() => {});
+}
 function onGeo(p) {
   const c = p.coords;
   handleFix({
@@ -336,6 +369,9 @@ function handleFix(raw) {
 
   // accumulate the trip for the end-of-drive safety report
   trackTrip(fix);
+
+  // mirror to the floating bubble when backgrounded over another app
+  updateOverlay(fix, best);
 }
 
 // Always-on overspeed engine — this is what genuinely curbs speeding, not just camera dodging.
@@ -493,6 +529,7 @@ function startTrip() {
 function endTripAndReport() {
   const t = S.trip;
   S.trip = null;
+  hideOverlay(); // trip over → no bubble
   if (!t || t.movingFixes < 5) { toast("الرحلة قصيرة — ما فيه تقرير"); return; }
   const pctOver = t.movingFixes ? (t.overFixes / t.movingFixes) * 100 : 0;
   const score = Math.round(clamp(100 - pctOver * 1.2 - t.maxOvershoot * 0.6, 0, 100));
@@ -1024,7 +1061,8 @@ async function keepAwake() {
   try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
 }
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") keepAwake();
+  if (document.visibilityState === "visible") { keepAwake(); hideOverlay(); }
+  else if (S.trip && overlayPlugin()) showOverlay(); // backgrounded mid-trip → float over Maps
 });
 
 // ---------- demo mode ----------
@@ -1122,6 +1160,12 @@ async function boot() {
     snd.unlock();
     keepAwake();
     startTrip();
+    // ask once for the "draw over other apps" permission so the bubble can
+    // float over Google Maps when backgrounded
+    if (!demo && overlayPlugin() && !localStorage.getItem("ashar.overlayAsked")) {
+      localStorage.setItem("ashar.overlayAsked", "1");
+      ensureOverlayPermission();
+    }
     if (demo) startDemo(+params.get("fast") || (params.get("demo") ? 4 : 1));
     else startGPS();
   };
