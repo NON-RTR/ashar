@@ -1,0 +1,22 @@
+name: Seed Guard
+
+# Daily safety net: if the SCDB seed in Supabase loses rows, restore it
+# automatically from the encrypted copy in repo secrets. Manual run too.
+on:
+  schedule:
+    - cron: "17 3 * * *" # ~03:17 UTC daily
+  workflow_dispatch:
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check & restore seed
+        env:
+          SEED_GZ_1: ${{ secrets.ASHAR_SEED_GZ_1 }}
+          SEED_GZ_2: ${{ secrets.ASHAR_SEED_GZ_2 }}
+        run: python3 scripts/seed_guard.py
