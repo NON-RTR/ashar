@@ -23,6 +23,7 @@ const S = {
   limit: 120,          // active road speed limit (km/h) — the safety baseline
   over: false,         // currently exceeding the active limit
   overAt: 0,           // last overspeed sound time
+  smoothKmh: 0,        // EMA-smoothed speed (kills GPS jitter)
   trip: null,          // accumulates the drive for the end-of-trip safety report
   removed: loadRemoved(), // ids reported "gone" — never shown again
   room: localStorage.getItem("ashar.room") || "", // family sync code (empty = solo)
@@ -216,24 +217,39 @@ function gpsStatus(cls, msg) {
   if (msg) { $("nextMini").textContent = msg; }
 }
 
-// derive heading/speed from movement when the device doesn't report them
+// Turn a raw GPS fix into a stable speed + heading.
+// Raw GPS speed jitters (shows 1-3 km/h while parked) and derived speed is
+// even noisier at low speed, so we: gate movement by GPS accuracy, drop a
+// noise floor (below it = stopped → 0), then EMA-smooth — much closer to
+// what Google's fused/Kalman speedometer shows.
+const SPEED_FLOOR_GOOD = 4;  // km/h, when accuracy is decent
+const SPEED_FLOOR_POOR = 7;  // km/h, when accuracy is weak (more jitter)
 function enrich(fix) {
+  const acc = fix.acc || 20;
+  let derivedKmh = null;
   const d = S.derived;
   if (d) {
     const dist = haversine(d.lat, d.lon, fix.lat, fix.lon);
     const dt = (fix.ts - d.ts) / 1000;
-    if (dist >= 12 && dt > 0.4) {
+    const noise = Math.max(8, acc * 0.5); // movement must beat GPS noise to count
+    if (dt > 0.3 && dist >= noise) {
       if (fix.heading == null) fix.heading = bearing(d.lat, d.lon, fix.lat, fix.lon);
-      if (fix.kmh == null) fix.kmh = clamp((dist / dt) * 3.6, 0, 220);
+      derivedKmh = clamp((dist / dt) * 3.6, 0, 240);
       S.derived = { lat: fix.lat, lon: fix.lon, ts: fix.ts };
-    } else {
-      if (fix.heading == null && S.fix) fix.heading = S.fix.heading;
-      if (fix.kmh == null) fix.kmh = dt > 3 ? 0 : S.fix ? S.fix.kmh : 0;
+    } else if (dt > 2) {
+      S.derived = { lat: fix.lat, lon: fix.lon, ts: fix.ts }; // re-anchor when ~stationary
     }
+    if (fix.heading == null && S.fix) fix.heading = S.fix.heading;
   } else {
     S.derived = { lat: fix.lat, lon: fix.lon, ts: fix.ts };
   }
-  if (fix.kmh == null) fix.kmh = 0;
+
+  // prefer the device's GPS speed; fall back to derived
+  let raw = fix.kmh != null ? fix.kmh : (derivedKmh != null ? derivedKmh : 0);
+  const floor = acc > 30 ? SPEED_FLOOR_POOR : SPEED_FLOOR_GOOD;
+  if (raw < floor) raw = 0;                       // parked / GPS jitter → 0
+  S.smoothKmh = raw === 0 ? 0 : (S.smoothKmh ? S.smoothKmh * 0.5 + raw * 0.5 : raw);
+  fix.kmh = S.smoothKmh;
   return fix;
 }
 
