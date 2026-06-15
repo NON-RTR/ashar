@@ -24,6 +24,7 @@ const S = {
   over: false,         // currently exceeding the active limit
   overAt: 0,           // last overspeed sound time
   trip: null,          // accumulates the drive for the end-of-trip safety report
+  removed: loadRemoved(), // ids reported "gone" — never shown again
   room: localStorage.getItem("ashar.room") || "", // family sync code (empty = solo)
   poll: null,
   settings: { sound: true, voice: true, strictDir: false, limit: 120, safety: true },
@@ -47,6 +48,12 @@ function saveUserCams() {
     JSON.stringify(S.cams.filter((c) => c.src !== "osm" && c.src !== "seed")));
 }
 
+// cameras the user reported as gone — suppressed across all sources + reloads
+function loadRemoved() {
+  try { return new Set(JSON.parse(localStorage.getItem("ashar.removed") || "[]")); } catch { return new Set(); }
+}
+function saveRemoved() { localStorage.setItem("ashar.removed", JSON.stringify([...S.removed])); }
+
 async function loadCams() {
   let base = [];
   try {
@@ -55,7 +62,7 @@ async function loadCams() {
     base = j.cams.map((c, i) => ({ id: "o" + i, lat: c[0], lon: c[1], sp: c[2], dir: c[3], src: "osm" }));
   } catch (e) { console.warn("cameras.json load failed", e); }
   const user = loadUserCams();
-  S.cams = base.concat(user);
+  S.cams = base.concat(user).filter((c) => !S.removed.has(c.id));
   $("camCount").textContent = S.cams.length;
 }
 
@@ -378,6 +385,25 @@ function clearAlertUI(passed = false) {
   $("alertCard").classList.remove("show", "s1", "s2");
   if (passed) { snd.ok(); }
   S.activeId = null;
+}
+
+// "Not there anymore" — suppress this camera everywhere + remember across reloads.
+// People-marked cams also sync the removal to the family; reference cams (SCDB/OSM)
+// are suppressed locally per device.
+function reportGone() {
+  const id = S.activeId;
+  if (!id) return;
+  const cam = S.cams.find((c) => c.id === id);
+  S.removed.add(id);
+  saveRemoved();
+  if (cam && isMine(cam)) syncRemove(id);
+  S.cams = S.cams.filter((c) => c.id !== id);
+  if (camMarkers[id]) { map.removeLayer(camMarkers[id]); delete camMarkers[id]; }
+  if (S.alerted[id]) delete S.alerted[id];
+  clearAlertUI();
+  $("camCount").textContent = S.cams.length;
+  snd.ok();
+  toast("شكراً — ما نبهك عنها بعد");
 }
 
 // ---------- speed-limit chip (live safety baseline) ----------
@@ -836,6 +862,7 @@ async function pullAndReconcile() {
       }
       continue;
     }
+    if (S.removed.has(r.id)) continue; // locally reported gone
     const c = { id: r.id, lat: r.lat, lon: r.lon, sp: r.sp | 0, dir: r.dir, src: "family", by: r.by || "" };
     S.cams.push(c); added++;
   }
@@ -887,7 +914,9 @@ function mergeSeed(compact) {
   let added = 0;
   for (const [la, lo, sp] of compact) {
     if (near(la, lo)) continue;
-    S.cams.push({ id: "s_" + Math.round(la * 1e5) + "_" + Math.round(lo * 1e5), lat: la, lon: lo, sp: sp | 0, dir: -1, src: "seed" });
+    const id = "s_" + Math.round(la * 1e5) + "_" + Math.round(lo * 1e5);
+    if (S.removed.has(id)) continue; // user reported this one gone
+    S.cams.push({ id, lat: la, lon: lo, sp: sp | 0, dir: -1, src: "seed" });
     occ.add(gkey(la, lo));
     added++;
   }
@@ -1006,6 +1035,7 @@ async function boot() {
   });
   $("setLimit").value = S.limit;
   $("setLimit").addEventListener("change", () => setLimit(clamp(parseInt($("setLimit").value) || 120, 30, 180)));
+  $("goneBtn").addEventListener("click", reportGone);
   $("btnEndTrip").addEventListener("click", () => { sheet.classList.remove("open"); endTripAndReport(); });
   $("tripClose").addEventListener("click", () => $("tripReport").classList.remove("show"));
 
