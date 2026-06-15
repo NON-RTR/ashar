@@ -1144,6 +1144,7 @@ async function boot() {
   importFromHash();
   iosInstallHint();
   updateSyncUI();
+  hideOverlay(); // a fresh launch is foreground → clear any stale floating bubble
   loadSeed(); // shared SCDB reference (once + cached) — independent of family room
   if (syncEnabled() && S.room) { pullAndReconcile().catch(() => {}); startPoll(); }
   document.addEventListener("visibilitychange", () => {

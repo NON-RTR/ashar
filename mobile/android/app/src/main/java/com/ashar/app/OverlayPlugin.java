@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
@@ -24,17 +25,22 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
 /**
- * أسهَر floating overlay — a small speed/alert bubble drawn over other apps
- * (incl. Google Maps) via SYSTEM_ALERT_WINDOW. JS shows it when the app is
- * backgrounded during a trip and updates it on each location fix.
+ * أسهَر floating overlay — a single speed/alert bubble drawn over other apps
+ * (incl. Google Maps) via SYSTEM_ALERT_WINDOW.
+ *
+ * Everything is static so the bubble is ONE per process: reopening the app
+ * (which keeps running via the location foreground service) reuses the same
+ * view instead of stacking duplicates. It's removed when the activity is
+ * destroyed (app closed) and by a tap on the bubble itself.
  */
 @CapacitorPlugin(name = "Overlay")
 public class OverlayPlugin extends Plugin {
-    private WindowManager wm;
-    private View bubble;
-    private TextView speedTv, infoTv;
-    private GradientDrawable bg;
-    private WindowManager.LayoutParams lp;
+    private static WindowManager wm;
+    private static View bubble;
+    private static TextView speedTv, infoTv;
+    private static GradientDrawable bg;
+    private static WindowManager.LayoutParams lp;
+    private static boolean attached = false;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private boolean canDraw() {
@@ -70,7 +76,11 @@ public class OverlayPlugin extends Plugin {
             try {
                 if (!canDraw()) { call.reject("no_overlay_permission"); return; }
                 if (bubble == null) build();
-                if (bubble.getParent() == null) wm.addView(bubble, lp);
+                if (!attached || bubble.getParent() == null) {
+                    if (bubble.getParent() != null) { try { wm.removeView(bubble); } catch (Exception ignored) {} }
+                    wm.addView(bubble, lp);
+                    attached = true;
+                }
                 bubble.setVisibility(View.VISIBLE);
                 call.resolve();
             } catch (Exception e) { call.reject(String.valueOf(e.getMessage())); }
@@ -81,18 +91,19 @@ public class OverlayPlugin extends Plugin {
     public void update(final PluginCall call) {
         final String speed = call.getString("speed", "0");
         final String info = call.getString("info", "");
-        final String state = call.getString("state", "normal"); // normal | warn | over
+        final String state = call.getString("state", "normal");
         ui.post(() -> {
             try {
-                if (speedTv == null) { call.resolve(); return; }
-                speedTv.setText(speed);
-                infoTv.setText(info);
-                int c = "over".equals(state) ? Color.parseColor("#ff3b30")
-                        : "warn".equals(state) ? Color.parseColor("#ffd47e")
-                        : Color.parseColor("#e8edf2");
-                speedTv.setTextColor(c);
-                bg.setStroke(dp(2), "over".equals(state)
-                        ? Color.parseColor("#ff3b30") : Color.parseColor("#40ffffff"));
+                if (speedTv != null) {
+                    speedTv.setText(speed);
+                    infoTv.setText(info);
+                    int c = "over".equals(state) ? Color.parseColor("#ff3b30")
+                            : "warn".equals(state) ? Color.parseColor("#ffd47e")
+                            : Color.parseColor("#e8edf2");
+                    speedTv.setTextColor(c);
+                    bg.setStroke(dp(2), "over".equals(state)
+                            ? Color.parseColor("#ff3b30") : Color.parseColor("#40ffffff"));
+                }
             } catch (Exception ignored) {}
             call.resolve();
         });
@@ -100,11 +111,20 @@ public class OverlayPlugin extends Plugin {
 
     @PluginMethod
     public void hide(final PluginCall call) {
-        ui.post(() -> {
-            try { if (bubble != null && bubble.getParent() != null) wm.removeView(bubble); }
-            catch (Exception ignored) {}
-            call.resolve();
-        });
+        ui.post(() -> { removeBubble(); call.resolve(); });
+    }
+
+    private static void removeBubble() {
+        try { if (wm != null && bubble != null && bubble.getParent() != null) wm.removeView(bubble); }
+        catch (Exception ignored) {}
+        attached = false;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        // app closed → take the bubble down with it
+        ui.post(OverlayPlugin::removeBubble);
+        super.handleOnDestroy();
     }
 
     private void build() {
@@ -124,14 +144,14 @@ public class OverlayPlugin extends Plugin {
         speedTv = new TextView(ctx);
         speedTv.setText("0");
         speedTv.setTextSize(32);
-        speedTv.setTypeface(speedTv.getTypeface(), android.graphics.Typeface.BOLD);
+        speedTv.setTypeface(speedTv.getTypeface(), Typeface.BOLD);
         speedTv.setTextColor(Color.parseColor("#e8edf2"));
         speedTv.setGravity(Gravity.CENTER);
         box.addView(speedTv);
 
         infoTv = new TextView(ctx);
-        infoTv.setText("أسهَر");
-        infoTv.setTextSize(11);
+        infoTv.setText("أسهَر · المس للإخفاء");
+        infoTv.setTextSize(10);
         infoTv.setTextColor(Color.parseColor("#8b97a3"));
         infoTv.setGravity(Gravity.CENTER);
         box.addView(infoTv);
@@ -150,17 +170,22 @@ public class OverlayPlugin extends Plugin {
         lp.x = dp(16);
         lp.y = dp(120);
 
-        // draggable so it can be moved off Google Maps' own controls
+        // drag to move; a tap (no drag) hides the bubble
         box.setOnTouchListener(new View.OnTouchListener() {
-            float ix, iy; int ox, oy;
+            float ix, iy; int ox, oy; boolean moved;
             @Override public boolean onTouch(View v, MotionEvent e) {
                 switch (e.getAction()) {
                     case MotionEvent.ACTION_DOWN:
-                        ix = e.getRawX(); iy = e.getRawY(); ox = lp.x; oy = lp.y; return true;
+                        ix = e.getRawX(); iy = e.getRawY(); ox = lp.x; oy = lp.y; moved = false;
+                        return true;
                     case MotionEvent.ACTION_MOVE:
-                        lp.x = ox + (int) (e.getRawX() - ix);
-                        lp.y = oy + (int) (e.getRawY() - iy);
+                        int dx = (int) (e.getRawX() - ix), dy = (int) (e.getRawY() - iy);
+                        if (Math.abs(dx) > dp(6) || Math.abs(dy) > dp(6)) moved = true;
+                        lp.x = ox + dx; lp.y = oy + dy;
                         try { wm.updateViewLayout(bubble, lp); } catch (Exception ignored) {}
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                        if (!moved) removeBubble(); // tap → dismiss
                         return true;
                 }
                 return false;
