@@ -166,11 +166,12 @@ document.addEventListener("click", (e) => {
 
 // ---------- GPS ----------
 let watchId = null;
+let gpsErr = null; // null | "denied" | "nosignal" | "unsupported" — for clear messaging
 const nativeBG = () => window.Capacitor?.isNativePlatform?.() && window.Capacitor.Plugins?.BackgroundGeolocation;
 function startGPS() {
   const BG = nativeBG();
   if (BG) { startNativeGPS(BG); return; } // Android app: real background tracking
-  if (!("geolocation" in navigator)) { gpsStatus("bad", "المتصفح ما يدعم الموقع"); return; }
+  if (!("geolocation" in navigator)) { gpsErr = "unsupported"; gpsStatus("bad", "المتصفح ما يدعم الموقع"); return; }
   watchId = navigator.geolocation.watchPosition(onGeo, onGeoErr, {
     enableHighAccuracy: true, maximumAge: 1000, timeout: 15000,
   });
@@ -189,6 +190,7 @@ function startNativeGPS(BG) {
     },
     (loc, err) => {
       if (err) {
+        gpsErr = err.code === "NOT_AUTHORIZED" ? "denied" : "nosignal";
         gpsStatus("bad", err.code === "NOT_AUTHORIZED" ? "اسمح للموقع «طوال الوقت» من الإعدادات" : "ما فيه إشارة GPS");
         return;
       }
@@ -244,6 +246,7 @@ function onGeo(p) {
   });
 }
 function onGeoErr(e) {
+  gpsErr = e.code === 1 ? "denied" : "nosignal";
   gpsStatus("bad", e.code === 1 ? "اسمح بالوصول للموقع" : "ما فيه إشارة GPS");
 }
 function gpsStatus(cls, msg) {
@@ -292,6 +295,7 @@ function handleFix(raw) {
   const fix = enrich(raw);
   S.fix = fix;
   window.__ASHAR.fixes++;
+  gpsErr = null; // a fix arrived → GPS is working
   gpsStatus(fix.acc <= 25 ? "good" : "mid");
 
   // map presence
@@ -640,8 +644,16 @@ function addCamHere() {
   snd.ok();
   syncPush(c);
 }
-$("fabCam").addEventListener("click", () => {
-  if (!S.fix) { toast("بانتظار إشارة GPS…"); return; }
+$("fabCam").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (!S.fix) {
+    const msg = gpsErr === "denied" ? "الموقع مو مفعّل — شغّل الـGPS واسمح للتطبيق، ثم أعد المحاولة"
+      : gpsErr === "unsupported" ? "جهازك ما يدعم تحديد الموقع"
+      : "ما قدرنا نحدد موقعك بعد — تأكد إن الـGPS مشغّل";
+    toast(msg);
+    snd.urgent(); // clearly a rejection, not a success
+    return;
+  }
   if (!familyName() && !localStorage.getItem("ashar.nameAsked")) askName(addCamHere);
   else addCamHere();
 });
