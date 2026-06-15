@@ -97,19 +97,36 @@ function initMap() {
   refreshMarkers();
 }
 
-// Only render markers inside the current view — keeps thousands of cameras
-// (e.g. an SCDB import) from choking the map. Alert logic uses S.cams data,
-// not markers, so coverage is unaffected by what's drawn.
+// Render markers only in view, capped to the nearest few, and hidden when
+// zoomed far out — so thousands of cameras (e.g. the SCDB seed) never choke
+// the map. Alert logic uses S.cams data, not markers, so coverage is unaffected.
+const MARKER_CAP = 160;      // most markers to draw at once
+const MARKER_MIN_ZOOM = 11;  // below this, only show your own + the active one
 function refreshMarkers() {
   if (!map) return;
-  const b = map.getBounds().pad(0.25);
+  const z = map.getZoom();
+  const detailed = z >= MARKER_MIN_ZOOM;
+  const b = map.getBounds().pad(0.2);
+  const c0 = map.getCenter();
+  const keep = new Set();
+
+  let inView = [];
   for (const c of S.cams) {
-    const inView = b.contains([c.lat, c.lon]);
-    if (inView) addCamMarker(c);
-    else if (camMarkers[c.id] && c.id !== S.activeId) {
-      map.removeLayer(camMarkers[c.id]);
-      delete camMarkers[c.id];
-    }
+    if (!b.contains([c.lat, c.lon])) continue;
+    if (c.id === S.activeId || isMine(c)) { keep.add(c.id); continue; } // always show these
+    if (detailed) inView.push(c);
+  }
+  // cap the reference cameras to the nearest MARKER_CAP to the screen centre
+  if (inView.length > MARKER_CAP) {
+    const d2 = (c) => (c.lat - c0.lat) ** 2 + (c.lon - c0.lng) ** 2;
+    inView.sort((a, b2) => d2(a) - d2(b2));
+    inView.length = MARKER_CAP;
+  }
+  for (const c of inView) keep.add(c.id);
+
+  for (const c of S.cams) {
+    if (keep.has(c.id)) addCamMarker(c);
+    else if (camMarkers[c.id]) { map.removeLayer(camMarkers[c.id]); delete camMarkers[c.id]; }
   }
 }
 
@@ -146,11 +163,41 @@ document.addEventListener("click", (e) => {
 
 // ---------- GPS ----------
 let watchId = null;
+const nativeBG = () => window.Capacitor?.isNativePlatform?.() && window.Capacitor.Plugins?.BackgroundGeolocation;
 function startGPS() {
+  const BG = nativeBG();
+  if (BG) { startNativeGPS(BG); return; } // Android app: real background tracking
   if (!("geolocation" in navigator)) { gpsStatus("bad", "المتصفح ما يدعم الموقع"); return; }
   watchId = navigator.geolocation.watchPosition(onGeo, onGeoErr, {
     enableHighAccuracy: true, maximumAge: 1000, timeout: 15000,
   });
+}
+// Native Android: foreground-service location that keeps feeding the alert
+// engine even while Google Maps is in front. Requests permission (fixes the
+// "never asked for location" issue) and shows a persistent notification.
+function startNativeGPS(BG) {
+  BG.addWatcher(
+    {
+      backgroundMessage: "يراقب كاميرات الطريق وينبّهك",
+      backgroundTitle: "أسهَر شغّال",
+      requestPermissions: true,
+      stale: false,
+      distanceFilter: 8,
+    },
+    (loc, err) => {
+      if (err) {
+        gpsStatus("bad", err.code === "NOT_AUTHORIZED" ? "اسمح للموقع «طوال الوقت» من الإعدادات" : "ما فيه إشارة GPS");
+        return;
+      }
+      if (!loc) return;
+      handleFix({
+        lat: loc.latitude, lon: loc.longitude, acc: loc.accuracy || 99,
+        kmh: loc.speed != null && loc.speed >= 0 ? loc.speed * 3.6 : null,
+        heading: loc.bearing != null && loc.bearing >= 0 ? loc.bearing : null,
+        ts: loc.time || Date.now(),
+      });
+    }
+  ).then((id) => { watchId = id; }).catch(() => gpsStatus("bad", "تعذّر تشغيل الموقع"));
 }
 function onGeo(p) {
   const c = p.coords;
