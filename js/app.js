@@ -9,8 +9,8 @@ const OVER_MARGIN = 4;     // km/h grace before "you're speeding"
 const OVER_BIG = 12;       // km/h over → urgent
 const LIMIT_PRESETS = [80, 100, 120, 140];
 const SEED_ROOM = "__seed__"; // shared reference DB (e.g. SCDB), pulled once + cached
-const SEED_VERSION = "scdb-2026-06b"; // bump to force every device to re-pull the seed
-const SEED_MIN = 3000; // SA seed is ~6k; a smaller cache means a truncated pull → refetch
+const SEED_VERSION = "scdb-2026-06c"; // bump to force every device to re-pull the seed
+const SEED_MIN = 5000; // SA seed is ~7.4k; a smaller cache means a truncated pull → refetch
 
 // ---------- state ----------
 const S = {
@@ -1003,23 +1003,30 @@ async function loadSeed() {
     }
   } catch { /* offline / not provisioned yet — silent, retry next launch */ }
 }
+const SEED_DEDUP_M = 20; // only drop a seed point if a camera is within 20m (true distance)
 function mergeSeed(compact) {
-  const CELL = 0.0004; // ~40m dedup vs OSM + crowd + already-loaded cams
-  const gkey = (la, lo) => Math.round(la / CELL) + "_" + Math.round(lo / CELL);
-  const occ = new Set(S.cams.map((c) => gkey(c.lat, c.lon)));
+  // ~55m lookup buckets; the actual decision is haversine < SEED_DEDUP_M so we
+  // don't over-merge distinct nearby cameras (the seed is already 20m-deduped).
+  const CELL = 0.0005;
+  const bkey = (la, lo) => Math.round(la / CELL) + "_" + Math.round(lo / CELL);
+  const grid = new Map();
+  const drop = (la, lo) => { const k = bkey(la, lo); (grid.get(k) || grid.set(k, []).get(k)).push([la, lo]); };
+  for (const c of S.cams) drop(c.lat, c.lon);
   const near = (la, lo) => {
     const a = Math.round(la / CELL), b = Math.round(lo / CELL);
-    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++)
-      if (occ.has(a + i + "_" + (b + j))) return true;
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+      const arr = grid.get(a + i + "_" + (b + j));
+      if (arr) for (const [pla, plo] of arr) if (haversine(la, lo, pla, plo) < SEED_DEDUP_M) return true;
+    }
     return false;
   };
   let added = 0;
   for (const [la, lo, sp] of compact) {
-    if (near(la, lo)) continue;
     const id = "s_" + Math.round(la * 1e5) + "_" + Math.round(lo * 1e5);
     if (S.removed.has(id)) continue; // user reported this one gone
+    if (near(la, lo)) continue;
     S.cams.push({ id, lat: la, lon: lo, sp: sp | 0, dir: -1, src: "seed" });
-    occ.add(gkey(la, lo));
+    drop(la, lo);
     added++;
   }
   if (added) { refreshMarkers(); $("camCount").textContent = S.cams.length; }
