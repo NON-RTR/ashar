@@ -1,0 +1,9 @@
+{
+  "appId": "com.ashar.app",
+  "appName": "Ashar",
+  "webDir": "www",
+  "server": {
+    "url": "https://non-rtr.github.io/ashar/",
+    "androidScheme": "https"
+  }
+}
