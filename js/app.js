@@ -9,7 +9,8 @@ const OVER_MARGIN = 4;     // km/h grace before "you're speeding"
 const OVER_BIG = 12;       // km/h over → urgent
 const LIMIT_PRESETS = [80, 100, 120, 140];
 const SEED_ROOM = "__seed__"; // shared reference DB (e.g. SCDB), pulled once + cached
-const SEED_VERSION = "scdb-2026-06"; // bump to force every device to re-pull the seed
+const SEED_VERSION = "scdb-2026-06b"; // bump to force every device to re-pull the seed
+const SEED_MIN = 3000; // SA seed is ~6k; a smaller cache means a truncated pull → refetch
 
 // ---------- state ----------
 const S = {
@@ -986,8 +987,9 @@ async function loadSeed() {
   if (!syncEnabled()) return;
   let cached = null;
   try { cached = JSON.parse(localStorage.getItem("ashar.seed") || "null"); } catch {}
-  // use cache only if it matches the current seed version (guards partial/stale caches)
-  if (cached && cached.length && localStorage.getItem("ashar.seedV") === SEED_VERSION) {
+  // use cache only if it matches the current version AND isn't a truncated pull
+  // (older builds capped the seed at 1000 rows before pagination was added)
+  if (cached && cached.length >= SEED_MIN && localStorage.getItem("ashar.seedV") === SEED_VERSION) {
     mergeSeed(cached);
     return;
   }

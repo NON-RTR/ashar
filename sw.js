@@ -1,7 +1,7 @@
 // أسهَر service worker — app shell precache + capped runtime tile cache
-const SHELL = "ashar-shell-v17";
-const TILES = "ashar-tiles-v17";
-const DATA = "ashar-data-v17";
+const SHELL = "ashar-shell-v18";
+const TILES = "ashar-tiles-v18";
+const DATA = "ashar-data-v18";
 const TILE_CAP = 400;
 
 const SHELL_FILES = [
